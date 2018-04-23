@@ -4315,8 +4315,8 @@ static u64 calculate_interference_relative_to_time(struct reorder_taskset *tasks
 			continue;	// Only take the tasks having deadlines within t+D_i into account.
 		else {
 			/* ceil(D_i/T_j)+1 */
-			interference_from_j = taskset->tasks[task_index]->dl.dl_deadline);	// Storing the deadline in interference_from_j for div calculation.
-			remainder = do_div(interference_from_j, taskset->tasks[j]->dl.dl_period))	// The quotient stores in the interference_from_j.
+			interference_from_j = taskset->tasks[task_index]->dl.dl_deadline;	// Storing the deadline in interference_from_j for div calculation.
+			remainder = do_div(interference_from_j, taskset->tasks[j]->dl.dl_period);	// The quotient stores in the interference_from_j.
 			interference_from_j += 1;
 			if (remainder > 0)
 				interference_from_j++;
@@ -4342,7 +4342,7 @@ static u64 calculate_response_time_relative_to_time(struct reorder_taskset *task
 
 	/* W_i(t) = [floor(t/Ti) + 1]*Ci + I_i(t) */
 	w_i_at_t = t;	// Storing t in w_i_at_t for div calculation below.
-	do_div(w_i_at_t, taskset->tasks[task_index]->dl.dl_deadline)
+	do_div(w_i_at_t, taskset->tasks[task_index]->dl.dl_deadline);
 	w_i_at_t = (w_i_at_t+1)*taskset->tasks[task_index]->dl.dl_runtime + calculate_interference_relative_to_time(taskset, task_index, t);
 
 	if (taskset->tasks[task_index]->dl.dl_runtime > (w_i_at_t-t))

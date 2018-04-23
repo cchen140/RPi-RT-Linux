@@ -26,6 +26,7 @@
 
 /* for reOrDer */
 static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq, struct dl_rq *dl_rq);
+static void arbitrarily_remove_reorder_task_pointer(struct reorder_taskset *taskset, struct task_struct *p);
 
 struct dl_bandwidth def_dl_bandwidth;
 
@@ -766,7 +767,7 @@ static void update_curr_dl(struct rq *rq)
 			continue;
 		if (reorder_taskset->tasks[i]->dl.deadline <= dl_se->deadline) {
 			reorder_taskset->tasks[i]->dl.reorder_rib -= delta_exec;
-			if (reorder_taskset->tasks[i]->dl.reorder_rib =< 0) {
+			if (reorder_taskset->tasks[i]->dl.reorder_rib <= 0) {
 				need_reschedule++;
 				//printk("ERROR: reOrDer: Task[%d]'s RIB became negative when running Task-%d.", i, curr->pid);
 			}
@@ -1862,15 +1863,15 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 
 	/* Compute the minimum inversion deadline m^t_{HP} */
 	for (j=0; j<taskset->task_count; j++) {
-		if (RB_EMPTY_NODE(&taskset->tasks[i]->dl.rb_node))
+		if (RB_EMPTY_NODE(&taskset->tasks[j]->dl.rb_node))
 			continue;	// This is not in dl_rq.
 
-		if ( (taskset->tasks[j]->dl.deadline > curr_dl_se->deadline) && (taskset->tasks[j]->dl.reorder_wcid < 0) ) 
+		if ( (taskset->tasks[j]->dl.deadline > curr_dl_se->deadline) && (taskset->tasks[j]->dl.reorder_wcib < 0) ) 
 			min_inversion_deadline = (taskset->tasks[j]->dl.deadline<min_inversion_deadline)?taskset->tasks[j]->dl.deadline:min_inversion_deadline;
 	}
 
 	/* Create a candidate list */
-	for (j=0; i<taskset->task_count; j++) {
+	for (j=0; j<taskset->task_count; j++) {
 		if (RB_EMPTY_NODE(&taskset->tasks[j]->dl.rb_node))
 			continue;	// This is not in dl_rq.
 
@@ -1898,7 +1899,7 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 }
 
 /* This function is for experiments. It assumes all tasks will be deleted at once. */
-static void arbitrarily_remove_reorder_task_pointer(struct redf_taskset *taskset, struct task_struct *p) {
+static void arbitrarily_remove_reorder_task_pointer(struct reorder_taskset *taskset, struct task_struct *p) {
 	taskset->task_count--;
 	if (taskset->task_count == 0) {
 		printk("reOrDer: all tasks are deleted.");
