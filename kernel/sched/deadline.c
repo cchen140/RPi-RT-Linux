@@ -18,6 +18,15 @@
 
 #include <linux/slab.h>
 
+#include <linux/random.h>	// This is for reOrDer
+#include <asm/div64.h>		// This is for 64/32 bits devide operations. (do_div())
+#include <linux/ktime.h>
+#include <linux/time.h>
+#include <linux/timekeeping.h>
+
+/* for reOrDer */
+static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq, struct dl_rq *dl_rq);
+
 struct dl_bandwidth def_dl_bandwidth;
 
 static inline struct task_struct *dl_task_of(struct sched_dl_entity *dl_se)
@@ -72,6 +81,9 @@ void init_dl_bw(struct dl_bw *dl_b)
 void init_dl_rq(struct dl_rq *dl_rq)
 {
 	dl_rq->rb_root = RB_ROOT;
+
+	/* initialize reOrDer's variables */
+	dl_rq->reorder_taskset.task_count = 0;
 
 #ifdef CONFIG_SMP
 	/* zero means no -deadline tasks */
@@ -357,6 +369,9 @@ static inline void setup_new_dl_entity(struct sched_dl_entity *dl_se)
 	 */
 	dl_se->deadline = rq_clock(rq) + dl_se->dl_deadline;
 	dl_se->runtime = dl_se->dl_runtime;
+
+	/* reOrDer variables */
+	dl_se->reorder_rib = dl_se->reorder_wcib;
 }
 
 /*
@@ -707,6 +722,9 @@ static void update_curr_dl(struct rq *rq)
 	struct task_struct *curr = rq->curr;
 	struct sched_dl_entity *dl_se = &curr->dl;
 	u64 delta_exec;
+	int i, need_reschedule = 0;
+
+	struct reorder_taskset *reorder_taskset = &rq->dl.reorder_taskset;
 
 	if (!dl_task(curr) || !on_dl_rq(dl_se))
 		return;
@@ -742,6 +760,19 @@ static void update_curr_dl(struct rq *rq)
 
 	dl_se->runtime -= delta_exec;
 
+	/* reOrDer: update the remaining inversion budget (RIB) for each of lower priority tasks */
+	for (i=0; i<reorder_taskset->task_count; i++) {
+		if (reorder_taskset->tasks[i] == curr)
+			continue;
+		if (reorder_taskset->tasks[i]->dl.deadline <= dl_se->deadline) {
+			reorder_taskset->tasks[i]->dl.reorder_rib -= delta_exec;
+			if (reorder_taskset->tasks[i]->dl.reorder_rib =< 0) {
+				need_reschedule++;
+				//printk("ERROR: reOrDer: Task[%d]'s RIB became negative when running Task-%d.", i, curr->pid);
+			}
+		}
+	}
+
 throttle:
 	if (dl_runtime_exceeded(dl_se) || dl_se->dl_yielded) {
 		dl_se->dl_throttled = 1;
@@ -751,6 +782,11 @@ throttle:
 
 		if (!is_leftmost(curr, &rq->dl))
 			resched_curr(rq);
+	}
+
+	/* reOrDer: Some tasks' RIBs reach 0. */
+	if (need_reschedule > 0) {
+		resched_curr(rq);
 	}
 
 	/*
@@ -1125,6 +1161,9 @@ pick_next_task_dl(struct rq *rq, struct task_struct *prev, struct pin_cookie coo
 	struct task_struct *p;
 	struct dl_rq *dl_rq;
 
+	// reOrDer: for benchmark
+	struct timespec ts_start, ts_end;
+
 	dl_rq = &rq->dl;
 
 	if (need_pull_dl_task(rq, prev)) {
@@ -1158,14 +1197,26 @@ pick_next_task_dl(struct rq *rq, struct task_struct *prev, struct pin_cookie coo
 
 	put_prev_task(rq, prev);
 
-	dl_se = pick_next_dl_entity(rq, dl_rq);
+	getnstimeofday(&ts_start);
+	//dl_se = pick_next_dl_entity(rq, dl_rq);
+	dl_se = pick_rad_next_dl_entity(rq, dl_rq);	// reOrDer: task picking function.
+	getnstimeofday(&ts_end);
+
 	BUG_ON(!dl_se);
 
 	p = dl_task_of(dl_se);
 	p->se.exec_start = rq_clock_task(rq);
 
+	/* reOrDer: Benchmark message output. */
+	if (&dl_se->rb_node == dl_rq->rb_leftmost) {
+		printk("redf: pid[%d] picked, redf(leftmost) overhead = %ld +ns. %ld", p->pid, (ts_end.tv_sec - ts_start.tv_sec), (ts_end.tv_nsec - ts_start.tv_nsec));
+	} else {
+		printk("redf: pid[%d] picked, redf(rad) overhead = %ld +ns. %ld", p->pid, (ts_end.tv_sec - ts_start.tv_sec), (ts_end.tv_nsec - ts_start.tv_nsec));
+	}
+	//printk("redf: pid[%d] is picked.", p->pid);	// log for redf
+
 	/* Running task will never be pushed. */
-       dequeue_pushable_dl_task(rq, p);
+        dequeue_pushable_dl_task(rq, p);
 
 	if (hrtick_enabled(rq))
 		start_hrtick_dl(rq, p);
@@ -1208,6 +1259,11 @@ static void task_fork_dl(struct task_struct *p)
 static void task_dead_dl(struct task_struct *p)
 {
 	struct dl_bw *dl_b = dl_bw_of(task_cpu(p));
+	struct reorder_taskset *taskset = &dl_rq_of_se(&p->dl)->reorder_taskset;
+
+	// Removing reOrDer tasks.
+	arbitrarily_remove_reorder_task_pointer(taskset, p);
+	//printk("redf: pid[%d] is dead.", p->pid);
 
 	/*
 	 * Since we are TASK_DEAD we won't slip out of the domain!
@@ -1771,6 +1827,81 @@ static void prio_changed_dl(struct rq *rq, struct task_struct *p,
 		 */
 		resched_curr(rq);
 #endif /* CONFIG_SMP */
+	}
+}
+
+static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
+						       struct dl_rq *dl_rq)
+{
+	/* Algorithm: 
+	 * Step 1 (candidate selection):
+	 *	Check if the highest priority task's rib is zero.
+	 *	if (yes)
+	 *		no randomization will be proceeded, go ahead with the highest priority task. 
+	 *	else
+	 *		a. compute m^t_{HP}
+	 *		b. add tasks with deadline <= m^t_{HP} to candidate list/
+	 * Setp 2 (random schedule):
+	 * 	Randomly choose a task from the candidate list.
+	 */
+
+	int j;
+	u64 rad_number;
+	struct task_struct *rad_candidates[30];
+	u64 candidate_count = 0;
+	struct task_struct *rad_task;
+	struct reorder_taskset *taskset = &dl_rq->reorder_taskset;
+	struct sched_dl_entity *curr_dl_se = rb_entry(dl_rq->rb_leftmost, struct sched_dl_entity, rb_node);
+	u64 min_inversion_deadline = (~(u64)0);	// initialized with the max value
+
+	/* Step 1 */
+
+	/* Does current highest priority task allow priority inversion? */
+	if (curr_dl_se->reorder_rib <= 0)
+		return pick_next_dl_entity(rq, dl_rq);
+
+	/* Compute the minimum inversion deadline m^t_{HP} */
+	for (j=0; j<taskset->task_count; j++) {
+		if (RB_EMPTY_NODE(&taskset->tasks[i]->dl.rb_node))
+			continue;	// This is not in dl_rq.
+
+		if ( (taskset->tasks[j]->dl.deadline > curr_dl_se->deadline) && (taskset->tasks[j]->dl.reorder_wcid < 0) ) 
+			min_inversion_deadline = (taskset->tasks[j]->dl.deadline<min_inversion_deadline)?taskset->tasks[j]->dl.deadline:min_inversion_deadline;
+	}
+
+	/* Create a candidate list */
+	for (j=0; i<taskset->task_count; j++) {
+		if (RB_EMPTY_NODE(&taskset->tasks[j]->dl.rb_node))
+			continue;	// This is not in dl_rq.
+
+		if (taskset->tasks[j]->dl.deadline <= min_inversion_deadline) {
+			rad_candidates[candidate_count] = taskset->tasks[j];
+			candidate_count++;
+		}
+	}
+
+	// Note that at least the highest priority task will be in the candidate list at this moment.
+
+
+	/* Setp 2 */
+
+	/* Select a random task. */
+	get_random_bytes(&rad_number, sizeof(rad_number)); // It's a system call from linux/random.h
+	rad_task = rad_candidates[do_div(rad_number,candidate_count)];
+
+	/* If it is the leftmost task, then do as usual. */
+	if (dl_rq->rb_leftmost == &rad_task->dl.rb_node) {
+		return pick_next_dl_entity(rq, dl_rq);
+	}	
+
+	return &rad_task->dl;
+}
+
+/* This function is for experiments. It assumes all tasks will be deleted at once. */
+static void arbitrarily_remove_reorder_task_pointer(struct redf_taskset *taskset, struct task_struct *p) {
+	taskset->task_count--;
+	if (taskset->task_count == 0) {
+		printk("reOrDer: all tasks are deleted.");
 	}
 }
 

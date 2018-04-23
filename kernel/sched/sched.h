@@ -508,6 +508,14 @@ struct rt_rq {
 #endif
 };
 
+/*
+ * reOrDer taskset structure
+ */
+struct reorder_taskset {
+	struct task_struct *tasks[30];
+	int task_count;
+};
+
 /* Deadline class' related fields in a runqueue */
 struct dl_rq {
 	/* runqueue is an rbtree, ordered by deadline */
@@ -515,6 +523,9 @@ struct dl_rq {
 	struct rb_node *rb_leftmost;
 
 	unsigned long dl_nr_running;
+
+	/* reOrDer taskset */
+	struct reorder_taskset reorder_taskset;
 
 #ifdef CONFIG_SMP
 	/*

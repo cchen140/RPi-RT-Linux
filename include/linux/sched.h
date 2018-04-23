@@ -1467,6 +1467,16 @@ struct sched_dl_entity {
 	 * own bandwidth to be enforced, thus we need one timer per task.
 	 */
 	struct hrtimer dl_timer;
+
+	/*
+	 * reOrDer variables:
+	 *
+	 * @reorder_wcib worst case inversion budget (WCIB), Vi = Di - WCRTi.
+	 *
+	 * @reorder_rib remaining inversion budget (RIB). It is set to V_i
+	 * (WCIB of the task_i) everytime a new job is instantiated.
+	 */
+	s64 reorder_wcib, reorder_rib;
 };
 
 union rcu_special {
