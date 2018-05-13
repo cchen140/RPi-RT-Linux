@@ -4323,7 +4323,7 @@ static u64 calculate_interference_relative_to_time(struct reorder_taskset *tasks
 
 			/* 1+floor[(t+Di-Dj)/Tj]+1 */
 			interference_from_j_2 = t + taskset->tasks[task_index]->dl.dl_deadline - taskset->tasks[j]->dl.dl_deadline;
-			do_div(interference_from_j_2, taskset->tasks[j]->dl.dl_deadline);	// The quotient stores in the interference_from_j_2.
+			do_div(interference_from_j_2, taskset->tasks[j]->dl.dl_period);	// The quotient stores in the interference_from_j_2.
 			interference_from_j_2 += 2;
 			
 			interference_from_j = (interference_from_j<interference_from_j_2) ? interference_from_j : interference_from_j_2;
@@ -4342,7 +4342,7 @@ static u64 calculate_response_time_relative_to_time(struct reorder_taskset *task
 
 	/* W_i(t) = [floor(t/Ti) + 1]*Ci + I_i(t) */
 	w_i_at_t = t;	// Storing t in w_i_at_t for div calculation below.
-	do_div(w_i_at_t, taskset->tasks[task_index]->dl.dl_deadline);
+	do_div(w_i_at_t, taskset->tasks[task_index]->dl.dl_period);
 	w_i_at_t = (w_i_at_t+1)*taskset->tasks[task_index]->dl.dl_runtime + calculate_interference_relative_to_time(taskset, task_index, t);
 
 	if (taskset->tasks[task_index]->dl.dl_runtime > (w_i_at_t-t))
