@@ -4392,7 +4392,7 @@ static u64 calculate_r_cap(struct reorder_taskset *taskset) {
 static u64 calculate_wcrt(struct reorder_taskset *taskset, int task_index) {
 	u64 t;
 	u64 wcrt = 0, wcrt_at_t = 0;
-	u64 t_max = calculate_r_cap(taskset) - taskset->tasks[task_index]->dl.dl_runtime;
+	u64 t_max = taskset->r_cap - taskset->tasks[task_index]->dl.dl_runtime;
 	for (t=0; t<t_max; t++) {
 		wcrt_at_t = calculate_response_time_relative_to_time(taskset, task_index, t);
 		wcrt = (wcrt_at_t>wcrt) ? wcrt_at_t : wcrt;
@@ -4413,18 +4413,24 @@ static s64 calculate_reorder_wcib(struct reorder_taskset *taskset, int task_inde
 static void __setscheduler(struct rq *rq, struct task_struct *p,
 			   const struct sched_attr *attr, bool keep_boost)
 {
+	/* reOrDer: initialize task's variables and update reOrDer's variables. */	
+	struct reorder_taskset *reorder_taskset;
+	int policy;	
+
 	int i;	// for task iteration.
 
 	__setscheduler_params(p, attr);
 
-	/* reOrDer: initialize task's variables and update reOrDer's variables. */	
-	struct reorder_taskset *reorder_taskset = &rq->dl.reorder_taskset;
-	int policy = attr->sched_policy;
-
+	policy = attr->sched_policy;
+	reorder_taskset = &rq->dl.reorder_taskset;
+	
 	if (dl_policy(policy)) {
 		/* Only new dl tasks will arrive here. Store this task. */
 		reorder_taskset->tasks[reorder_taskset->task_count] = p;
 		reorder_taskset->task_count++;
+
+		reorder_taskset->r_cap = calculate_r_cap(reorder_taskset);
+		printk("reOrDer: new r_cap value = %llu", reorder_taskset->r_cap);
 
 		printk("reOrDer: new V_i values:");
 		/* Compute and update Vi (WCIB) for each task (while including the new task) */
