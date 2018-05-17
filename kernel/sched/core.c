@@ -4393,10 +4393,13 @@ static u64 calculate_wcrt(struct reorder_taskset *taskset, int task_index) {
 	u64 t;
 	u64 wcrt = 0, wcrt_at_t = 0;
 	u64 t_max = taskset->r_cap - taskset->tasks[task_index]->dl.dl_runtime;
-	for (t=0; t<t_max; t++) {
+
+	// A restriction is placed here to reduce the search space: task's parameters should be multiple of miniseconds.
+	for (t=0; (t<t_max)||((t==0)&&(t_max==0)); t+=1000000) {
 		wcrt_at_t = calculate_response_time_relative_to_time(taskset, task_index, t);
 		wcrt = (wcrt_at_t>wcrt) ? wcrt_at_t : wcrt;
 	}
+
 	return wcrt;
 }
 
@@ -4413,7 +4416,7 @@ static s64 calculate_reorder_wcib(struct reorder_taskset *taskset, int task_inde
 static void __setscheduler(struct rq *rq, struct task_struct *p,
 			   const struct sched_attr *attr, bool keep_boost)
 {
-	/* reOrDer: initialize task's variables and update reOrDer's variables. */	
+	/* redf: initialize task's variables and update reOrDer's variables. */	
 	struct reorder_taskset *reorder_taskset;
 	int policy;	
 
@@ -4430,16 +4433,16 @@ static void __setscheduler(struct rq *rq, struct task_struct *p,
 		reorder_taskset->task_count++;
 
 		reorder_taskset->r_cap = calculate_r_cap(reorder_taskset);
-		printk("reOrDer: new r_cap value = %llu", reorder_taskset->r_cap);
+		printk("redf: new r_cap value = %llu", reorder_taskset->r_cap);
 
-		printk("reOrDer: new V_i values:");
+		printk("redf: new V_i values:");
 		/* Compute and update Vi (WCIB) for each task (while including the new task) */
 		for (i=0; i<reorder_taskset->task_count; i++) {
 			reorder_taskset->tasks[i]->dl.reorder_wcib = calculate_reorder_wcib(reorder_taskset, i);
-			printk("reOrDer: V_%d = %llu.", i, reorder_taskset->tasks[i]->dl.reorder_wcib);
+			printk("redf: V_%d = %llu.", i, reorder_taskset->tasks[i]->dl.reorder_wcib);
 		}
 	}
-	/* reOrDer END */
+	/* redf END */
 
 	/*
 	 * Keep a potential priority boosting if called from
