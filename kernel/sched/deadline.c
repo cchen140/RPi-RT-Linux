@@ -371,7 +371,7 @@ static inline void setup_new_dl_entity(struct sched_dl_entity *dl_se)
 	dl_se->deadline = rq_clock(rq) + dl_se->dl_deadline;
 	dl_se->runtime = dl_se->dl_runtime;
 
-	/* reOrDer variables */
+	/* redf variables. Note that this is only called when a task is created. */
 	dl_se->reorder_rib = dl_se->reorder_wcib;
 }
 
@@ -422,6 +422,9 @@ static void replenish_dl_entity(struct sched_dl_entity *dl_se,
 	while (dl_se->runtime <= 0) {
 		dl_se->deadline += pi_se->dl_period;
 		dl_se->runtime += pi_se->dl_runtime;
+
+		// redf: reset the task's inversion budget.
+		dl_se->reorder_rib = pi_se->reorder_wcib;
 	}
 
 	/*
@@ -437,6 +440,9 @@ static void replenish_dl_entity(struct sched_dl_entity *dl_se,
 		printk_deferred_once("sched: DL replenish lagged too much\n");
 		dl_se->deadline = rq_clock(rq) + pi_se->dl_deadline;
 		dl_se->runtime = pi_se->dl_runtime;
+
+		// redf: reset the task's inversion budget.
+		dl_se->reorder_rib = pi_se->reorder_wcib;
 	}
 
 	if (dl_se->dl_yielded)
@@ -518,6 +524,9 @@ static void update_dl_entity(struct sched_dl_entity *dl_se,
 	    dl_entity_overflow(dl_se, pi_se, rq_clock(rq))) {
 		dl_se->deadline = rq_clock(rq) + pi_se->dl_deadline;
 		dl_se->runtime = pi_se->dl_runtime;
+
+		// redf: reset the task's inversion budget.
+		dl_se->reorder_rib = pi_se->reorder_wcib;
 	}
 }
 
@@ -664,10 +673,16 @@ static enum hrtimer_restart dl_task_timer(struct hrtimer *timer)
 #endif
 
 	enqueue_task_dl(rq, p, ENQUEUE_REPLENISH);
+	
+	/* In redf, we want to reschedule whenever a new job arrives. */	
+	if (dl_task(rq->curr))
+		resched_curr(rq);
+	/* Original dl code block.
 	if (dl_task(rq->curr))
 		check_preempt_curr_dl(rq, p, 0);
 	else
 		resched_curr(rq);
+	*/
 
 #ifdef CONFIG_SMP
 	/*
