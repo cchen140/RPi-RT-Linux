@@ -1873,13 +1873,14 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 	u64 candidate_count = 0;
 	struct task_struct *rad_task;
 	struct reorder_taskset *taskset = &dl_rq->reorder_taskset;
-	struct sched_dl_entity *curr_dl_se = rb_entry(dl_rq->rb_leftmost, struct sched_dl_entity, rb_node);
+	struct sched_dl_entity *leftmost_dl_se = rb_entry(dl_rq->rb_leftmost, struct sched_dl_entity, rb_node);
 	u64 min_inversion_deadline = (~(u64)0);	// initialized with the max value
+	s64 min_inversion_budget = 0;
 
 	/* Step 1 */
 
 	/* Does current highest priority task allow priority inversion? */
-	if (curr_dl_se->reorder_rib <= 0)
+	if (leftmost_dl_se->reorder_rib <= 0)
 		return pick_next_dl_entity(rq, dl_rq);
 
 	/* Compute the minimum inversion deadline m^t_{HP} */
@@ -1887,7 +1888,7 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 		if (RB_EMPTY_NODE(&taskset->tasks[j]->dl.rb_node))
 			continue;	// This is not in dl_rq.
 
-		if ( (taskset->tasks[j]->dl.deadline > curr_dl_se->deadline) && (taskset->tasks[j]->dl.reorder_wcib < 0) ) 
+		if ( (taskset->tasks[j]->dl.deadline > leftmost_dl_se->deadline) && (taskset->tasks[j]->dl.reorder_wcib < 0) ) 
 			min_inversion_deadline = (taskset->tasks[j]->dl.deadline<min_inversion_deadline)?taskset->tasks[j]->dl.deadline:min_inversion_deadline;
 	}
 
@@ -1903,6 +1904,9 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 	}
 
 	// Note that at least the highest priority task will be in the candidate list at this moment.
+	if (candidate_count == 0) {
+		printk("ERROR redf: candidate = 0");
+	}
 
 
 	/* Setp 2 */
@@ -1916,12 +1920,46 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 		return pick_next_dl_entity(rq, dl_rq);
 	}	
 
+	/* Check if the chosen task's remaining runtime is less than 
+	 * the smallest rib in rq. */
+	min_inversion_budget = leftmost_dl_se->reorder_rib;
+	for (j=0; j<taskset->task_count; j++) {
+		if (RB_EMPTY_NODE(&taskset->tasks[j]->dl.rb_node))
+			continue;	// This is not in dl_rq.
+
+		if (taskset->tasks[j]->dl.deadline <= rad_task->dl.deadline) {
+			if (taskset->tasks[j]->dl.reorder_rib < min_inversion_budget)
+				min_inversion_budget = taskset->tasks[j]->dl.reorder_rib;
+		}
+	}
+
+	if (rad_task->dl.runtime > min_inversion_budget) {
+		printk("redf: c > min_rib");
+		return pick_next_dl_entity(rq, dl_rq);
+	}
+
 	return &rad_task->dl;
 }
 
 /* This function is for experiments. It assumes all tasks will be deleted at once. */
 static void arbitrarily_remove_reorder_task_pointer(struct reorder_taskset *taskset, struct task_struct *p) {
+	int j, deleted_task_index;
+	
+	/* Find the index of the deleted task in reorder_taskset. */
+	for (j=0; j<taskset->task_count; j++) {
+		if (taskset->tasks[j] == p) {
+			deleted_task_index = j;
+			break;
+		}
+	}
+
+	/* Swap the deleted one and the last one in the array. */
+	if (deleted_task_index != (taskset->task_count-1)) {
+		taskset->tasks[deleted_task_index] = taskset->tasks[taskset->task_count-1];
+	}
 	taskset->task_count--;
+	printk("redf: pid[%d] is deleted.", p->pid);
+
 	if (taskset->task_count == 0) {
 		printk("reOrDer: all tasks are deleted.");
 	}
