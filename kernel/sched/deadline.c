@@ -781,10 +781,16 @@ static void update_curr_dl(struct rq *rq)
 		if (reorder_taskset->tasks[i] == curr)
 			continue;
 		if (reorder_taskset->tasks[i]->dl.deadline <= dl_se->deadline) {
-			reorder_taskset->tasks[i]->dl.reorder_rib -= delta_exec;
-			if (reorder_taskset->tasks[i]->dl.reorder_rib <= 0) {
-				need_reschedule++;
-				//printk("ERROR: reOrDer: Task[%d]'s RIB became negative when running Task-%d.", i, curr->pid);
+			/* Only decrease a job's rib if it is not a newly arrived job. 
+			 * A new job is always arrived before this update_curr_dl() is called,
+			 * so it is necessary to exclude such new jobs.
+			 */
+			if ((reorder_taskset->tasks[i]->dl.deadline-reorder_taskset->tasks[i]->dl.dl_period) <= (rq_clock_task(rq)-delta_exec)) {		
+				reorder_taskset->tasks[i]->dl.reorder_rib -= delta_exec;
+				if (reorder_taskset->tasks[i]->dl.reorder_rib <= 0) {
+					need_reschedule++;
+					//printk("ERROR: redf: Task[%d]'s RIB became negative when running Task-%d.", i, curr->pid);
+				}
 			}
 		}
 	}
