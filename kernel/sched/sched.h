@@ -514,7 +514,7 @@ struct rt_rq {
 struct reorder_taskset {
 	struct task_struct *tasks[30];
 	int task_count;
-	u64 r_cap;	// The maximum workload of the taskset.
+	u64 r_cap; /* the maximum workload of the taskset */
 };
 
 /* Deadline class' related fields in a runqueue */
@@ -527,6 +527,7 @@ struct dl_rq {
 
 	/* reOrDer taskset */
 	struct reorder_taskset reorder_taskset;
+	struct hrtimer redf_pi_timer; /* priority inversion timer */
 
 #ifdef CONFIG_SMP
 	/*

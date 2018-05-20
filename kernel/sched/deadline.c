@@ -26,6 +26,9 @@
 
 /* for reOrDer */
 static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq, struct dl_rq *dl_rq);
+void init_redf_pi_timer(struct hrtimer *timer);
+static int start_redf_pi_timer(struct hrtimer *timer, s64 pi_time_budget);
+void cancel_redf_pi_timer(struct hrtimer *timer);
 static void arbitrarily_remove_reorder_task_pointer(struct reorder_taskset *taskset, struct task_struct *p);
 
 struct dl_bandwidth def_dl_bandwidth;
@@ -83,8 +86,9 @@ void init_dl_rq(struct dl_rq *dl_rq)
 {
 	dl_rq->rb_root = RB_ROOT;
 
-	/* initialize reOrDer's variables */
+	/* initialize redf's variables */
 	dl_rq->reorder_taskset.task_count = 0;
+	init_redf_pi_timer(&dl_rq->redf_pi_timer);
 
 #ifdef CONFIG_SMP
 	/* zero means no -deadline tasks */
@@ -1183,10 +1187,15 @@ pick_next_task_dl(struct rq *rq, struct task_struct *prev, struct pin_cookie coo
 	struct task_struct *p;
 	struct dl_rq *dl_rq;
 
-	// reOrDer: for benchmark
+	// redf: for benchmark
 	struct timespec ts_start, ts_end;
 
 	dl_rq = &rq->dl;
+
+	/* redf: to this point we are sure the tasks will be rescheduled, so 
+	 * stop previously started redf_pi_timer if any. 
+	 */
+	cancel_redf_pi_timer(&dl_rq->redf_pi_timer);
 
 	if (need_pull_dl_task(rq, prev)) {
 		/*
@@ -1221,7 +1230,7 @@ pick_next_task_dl(struct rq *rq, struct task_struct *prev, struct pin_cookie coo
 
 	getnstimeofday(&ts_start);
 	//dl_se = pick_next_dl_entity(rq, dl_rq);
-	dl_se = pick_rad_next_dl_entity(rq, dl_rq);	// reOrDer: task picking function.
+	dl_se = pick_rad_next_dl_entity(rq, dl_rq);	// redf: task picking function.
 	getnstimeofday(&ts_end);
 
 	BUG_ON(!dl_se);
@@ -1933,12 +1942,76 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 		}
 	}
 
-	if (rad_task->dl.runtime > min_inversion_budget) {
-		printk("redf: c > min_rib");
+	if (min_inversion_budget <= 0) {
+		/* Priority inversion is not allowed for the chosen task. */
 		return pick_next_dl_entity(rq, dl_rq);
+	} else if (rad_task->dl.runtime > min_inversion_budget) {
+		/* Start the priority inversion timer for the next scheduling point if 
+		 * the minimum inversion budget of higher priority tasks is smaller than
+		 * the chosen task's remaining computation time. */
+		printk("redf: c > min_rib %lld", min_inversion_budget);
+		if (0 == start_redf_pi_timer(&dl_rq->redf_pi_timer, min_inversion_budget)) {
+			/* The timer somehow fails to start, so be safe and choose the leftmost task. */
+			return pick_next_dl_entity(rq, dl_rq);
+		}
 	}
 
 	return &rad_task->dl;
+}
+
+/* pi_time_budget is in nanoseconds. */
+static int start_redf_pi_timer(struct hrtimer *timer, s64 pi_time_budget) {
+	ktime_t now, act;
+
+	now = hrtimer_cb_get_time(timer);
+	act = ktime_add_ns(now, pi_time_budget);
+
+	/*
+	 * If the expiry time already passed, e.g., because the budget is too small, 
+	 * don't even try to start the timer in the past!
+	 */
+	if (ktime_us_delta(act, now) < 0)
+		return 0;
+	
+	if (hrtimer_is_queued(timer)) {
+		hrtimer_cancel(timer);
+	}
+
+	hrtimer_start(timer, act, HRTIMER_MODE_ABS);
+
+	printk("redf: pi_timer starts.");
+
+	return 1;
+}
+
+static enum hrtimer_restart redf_pi_timer(struct hrtimer *timer) {
+	struct dl_rq *dl_rq = container_of(timer, struct dl_rq, redf_pi_timer);
+	struct rq *rq = rq_of_dl_rq(dl_rq);
+
+	printk("redf: pi_timer is up.");
+
+	raw_spin_lock(&rq->lock);
+
+	sched_clock_tick();
+	update_rq_clock(rq);
+	resched_curr(rq);
+
+	raw_spin_unlock(&rq->lock);
+
+	return HRTIMER_NORESTART;
+}
+
+void init_redf_pi_timer(struct hrtimer *timer) {
+	hrtimer_init(timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	timer->function = redf_pi_timer;
+	timer->irqsafe = 1;
+}
+
+void cancel_redf_pi_timer(struct hrtimer *timer) {
+	if (hrtimer_is_queued(timer)) {
+		hrtimer_cancel(timer);
+		printk("redf: pi_timer is canceled.");
+	}
 }
 
 /* This function is for experiments. It assumes all tasks will be deleted at once. */
