@@ -1890,7 +1890,8 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 
 	/* Does current highest priority task allow priority inversion? */
 	if (leftmost_dl_se->reorder_rib <= 0)
-		return pick_next_dl_entity(rq, dl_rq);
+		return leftmost_dl_se;
+		//return pick_next_dl_entity(rq, dl_rq);
 
 	/* Compute the minimum inversion deadline m^t_{HP} */
 	for (j=0; j<taskset->task_count; j++) {
@@ -1923,7 +1924,8 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 
 	/* If there is only one candidate (the leftmost one) then pick that one. */
 	if (candidate_count <= 1)
-		return pick_next_dl_entity(rq, dl_rq);
+		return leftmost_dl_se;
+		//return pick_next_dl_entity(rq, dl_rq);
 
 
 	/* Setp 2 */
@@ -1932,9 +1934,10 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 	get_random_bytes(&rad_number, sizeof(rad_number)); // It's a system call from linux/random.h
 	rad_task = rad_candidates[do_div(rad_number,candidate_count)];
 
-	/* If it is the leftmost task, then do as usual. */
+	/* If it is the leftmost task, then just return it. */
 	if (dl_rq->rb_leftmost == &rad_task->dl.rb_node) {
-		return pick_next_dl_entity(rq, dl_rq);
+		return leftmost_dl_se;
+		//return pick_next_dl_entity(rq, dl_rq);
 	}	
 
 	/* Check if the chosen task's remaining runtime is less than 
@@ -1952,7 +1955,8 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 
 	if (min_inversion_budget <= 0) {
 		/* Priority inversion is not allowed for the chosen task. */
-		return pick_next_dl_entity(rq, dl_rq);
+		return leftmost_dl_se;
+		//return pick_next_dl_entity(rq, dl_rq);
 	} else if (rad_task->dl.runtime > min_inversion_budget) {
 		/* Start the priority inversion timer for the next scheduling point if 
 		 * the minimum inversion budget of higher priority tasks is smaller than
@@ -1960,7 +1964,8 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 		//printk("redf: c > min_rib %lld", min_inversion_budget);
 		if (0 == start_redf_pi_timer(&dl_rq->redf_pi_timer, min_inversion_budget)) {
 			/* The timer somehow fails to start, so be safe and choose the leftmost task. */
-			return pick_next_dl_entity(rq, dl_rq);
+			return leftmost_dl_se;
+			//return pick_next_dl_entity(rq, dl_rq);
 		}
 	}
 
