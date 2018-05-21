@@ -1912,10 +1912,18 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 		}
 	}
 
+
 	// Note that at least the highest priority task will be in the candidate list at this moment.
+	/* 	
 	if (candidate_count == 0) {
 		printk("ERROR redf: candidate = 0");
+		return pick_next_dl_entity(rq, dl_rq);
 	}
+	*/
+
+	/* If there is only one candidate (the leftmost one) then pick that one. */
+	if (candidate_count <= 1)
+		return pick_next_dl_entity(rq, dl_rq);
 
 
 	/* Setp 2 */
