@@ -1949,7 +1949,7 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 		/* Start the priority inversion timer for the next scheduling point if 
 		 * the minimum inversion budget of higher priority tasks is smaller than
 		 * the chosen task's remaining computation time. */
-		printk("redf: c > min_rib %lld", min_inversion_budget);
+		//printk("redf: c > min_rib %lld", min_inversion_budget);
 		if (0 == start_redf_pi_timer(&dl_rq->redf_pi_timer, min_inversion_budget)) {
 			/* The timer somehow fails to start, so be safe and choose the leftmost task. */
 			return pick_next_dl_entity(rq, dl_rq);
@@ -1979,16 +1979,13 @@ static int start_redf_pi_timer(struct hrtimer *timer, s64 pi_time_budget) {
 
 	hrtimer_start(timer, act, HRTIMER_MODE_ABS);
 
-	printk("redf: pi_timer starts.");
-
 	return 1;
 }
 
+/* Randomized EDF priority inversion timer is up. */
 static enum hrtimer_restart redf_pi_timer(struct hrtimer *timer) {
 	struct dl_rq *dl_rq = container_of(timer, struct dl_rq, redf_pi_timer);
 	struct rq *rq = rq_of_dl_rq(dl_rq);
-
-	printk("redf: pi_timer is up.");
 
 	raw_spin_lock(&rq->lock);
 
@@ -2010,7 +2007,6 @@ void init_redf_pi_timer(struct hrtimer *timer) {
 void cancel_redf_pi_timer(struct hrtimer *timer) {
 	if (hrtimer_is_queued(timer)) {
 		hrtimer_cancel(timer);
-		printk("redf: pi_timer is canceled.");
 	}
 }
 
