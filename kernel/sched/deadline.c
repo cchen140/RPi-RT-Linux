@@ -1901,7 +1901,7 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 
 		rq_task_count++;
 
-		if ( (taskset->tasks[j]->dl.deadline > leftmost_dl_se->deadline) && (taskset->tasks[j]->dl.reorder_wcib < 0) ) 
+		if ( (taskset->tasks[j]->dl.deadline > leftmost_dl_se->deadline) && (taskset->tasks[j]->dl.reorder_rib < 0) ) 
 			min_inversion_deadline = (taskset->tasks[j]->dl.deadline<min_inversion_deadline)?taskset->tasks[j]->dl.deadline:min_inversion_deadline;
 	}
 
