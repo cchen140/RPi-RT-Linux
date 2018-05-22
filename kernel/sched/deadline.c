@@ -1879,6 +1879,7 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 	int j;
 	u64 rad_number;
 	struct task_struct *rad_candidates[30];
+	u64 rq_task_count = 0;
 	u64 candidate_count = 0;
 	struct task_struct *rad_task;
 	struct reorder_taskset *taskset = &dl_rq->reorder_taskset;
@@ -1898,9 +1899,15 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 		if (RB_EMPTY_NODE(&taskset->tasks[j]->dl.rb_node))
 			continue;	// This is not in dl_rq.
 
+		rq_task_count++;
+
 		if ( (taskset->tasks[j]->dl.deadline > leftmost_dl_se->deadline) && (taskset->tasks[j]->dl.reorder_wcib < 0) ) 
 			min_inversion_deadline = (taskset->tasks[j]->dl.deadline<min_inversion_deadline)?taskset->tasks[j]->dl.deadline:min_inversion_deadline;
 	}
+
+	/* Return the leftmost one if there is only one job in the rq. */
+	if (rq_task_count == 1)
+		return leftmost_dl_se;
 
 	/* Create a candidate list */
 	for (j=0; j<taskset->task_count; j++) {
@@ -1913,14 +1920,9 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 		}
 	}
 
-
-	// Note that at least the highest priority task will be in the candidate list at this moment.
-	/* 	
-	if (candidate_count == 0) {
-		printk("ERROR redf: candidate = 0");
-		return pick_next_dl_entity(rq, dl_rq);
-	}
-	*/
+	/* Note that at least the highest priority task will be in the candidate 
+	 * list at this moment.
+	 */
 
 	/* If there is only one candidate (the leftmost one) then pick that one. */
 	if (candidate_count <= 1)
