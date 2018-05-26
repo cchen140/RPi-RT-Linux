@@ -1981,7 +1981,7 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 	if ((candidate_count==rq_task_count) && (idle_time_scheduling_allowed==1)) {
 		rad_candidates[candidate_count] = &dummy_idle_task;
 		candidate_count++;
-		printk("redf: adding idle task in the candidate.");
+		//printk("redf: adding idle task in the candidate.");
 	}
 #endif
 
@@ -1998,7 +1998,7 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 			return leftmost_dl_se;
 		} else {
 			dl_rq->redf_idle_time_acting = true;
-			printk("redf: idle task is selected - run for %lld", rq_min_task_rib);
+			//printk("redf: idle task is selected - run for %lld", rq_min_task_rib);
 			return NULL;	// return null for idle time scheduling.
 		}
 	}
@@ -2125,8 +2125,11 @@ void update_rib_after_pi_idle_time(struct dl_rq *dl_rq) {
 		
 		taskset->tasks[i]->dl.reorder_rib -= delta_idle_time;
 
-		if (taskset->tasks[i]->dl.reorder_rib < 0)
-			printk("Error: redf: rib becomes 0 after idle time. - %lld", taskset->tasks[i]->dl.reorder_rib);
+		/* Due to context swtich overhead, consumed time may be more than what we scheduled. 
+		 * This should already be avoided by limiting the scheduled idle time to 90% of its
+		 * maximum possible time. */
+		//if (taskset->tasks[i]->dl.reorder_rib < 0)
+		//	printk("redf: rib becomes 0 after idle time. - %lld", taskset->tasks[i]->dl.reorder_rib);
 	}
 }
 
