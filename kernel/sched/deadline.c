@@ -25,6 +25,7 @@
 #include <linux/timekeeping.h>
 
 /* for reOrDer */
+#define	REDF_IDLE_TIME_SCHEDULING	2	// Enable idle time scheduling in redf.
 static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq, struct dl_rq *dl_rq);
 void init_redf_pi_timer(struct hrtimer *timer);
 static int start_redf_pi_timer(struct hrtimer *timer, s64 pi_time_budget);
@@ -1233,28 +1234,41 @@ pick_next_task_dl(struct rq *rq, struct task_struct *prev, struct pin_cookie coo
 	dl_se = pick_rad_next_dl_entity(rq, dl_rq);	// redf: task picking function.
 	getnstimeofday(&ts_end);
 
-	BUG_ON(!dl_se);
+	//BUG_ON(!dl_se);	// This is no longer a bug if REDF idle time scheduling is enabled.
 
-	p = dl_task_of(dl_se);
-	p->se.exec_start = rq_clock_task(rq);
+	if (dl_se == NULL) {
+		/* idle task is picked. */
 
-	/* reOrDer: Benchmark message output. */
-	if (&dl_se->rb_node == dl_rq->rb_leftmost) {
-		printk("redf: pid[%d] picked, redf(leftmost) overhead = %ld +ns. %ld", p->pid, (ts_end.tv_sec - ts_start.tv_sec), (ts_end.tv_nsec - ts_start.tv_nsec));
+		printk("redf: idle task picked, redf(idle) overhead = %ld +ns. %ld", (ts_end.tv_sec - ts_start.tv_sec), (ts_end.tv_nsec - ts_start.tv_nsec));
+		return NULL;
 	} else {
-		printk("redf: pid[%d] picked, redf(rad) overhead = %ld +ns. %ld", p->pid, (ts_end.tv_sec - ts_start.tv_sec), (ts_end.tv_nsec - ts_start.tv_nsec));
+		/* Non-idle task is picked. */
+
+		p = dl_task_of(dl_se);
+		p->se.exec_start = rq_clock_task(rq);
+
+		/* reOrDer: Benchmark message output. */
+		if (&dl_se->rb_node == dl_rq->rb_leftmost) {
+			printk("redf: pid[%d] picked, redf(leftmost) overhead = %ld +ns. %ld", p->pid, (ts_end.tv_sec - ts_start.tv_sec), (ts_end.tv_nsec - ts_start.tv_nsec));
+		} else {
+			printk("redf: pid[%d] picked, redf(rad) overhead = %ld +ns. %ld", p->pid, (ts_end.tv_sec - ts_start.tv_sec), (ts_end.tv_nsec - ts_start.tv_nsec));
+		}
+		//printk("redf: pid[%d] is picked.", p->pid);	// log for redf
+
+		/* Running task will never be pushed. */
+		dequeue_pushable_dl_task(rq, p);
+
+		if (hrtick_enabled(rq))
+			start_hrtick_dl(rq, p);
+
+		queue_push_tasks(rq);
+
+		return p;
 	}
-	//printk("redf: pid[%d] is picked.", p->pid);	// log for redf
 
-	/* Running task will never be pushed. */
-        dequeue_pushable_dl_task(rq, p);
 
-	if (hrtick_enabled(rq))
-		start_hrtick_dl(rq, p);
 
-	queue_push_tasks(rq);
-
-	return p;
+	
 }
 
 static void put_prev_task_dl(struct rq *rq, struct task_struct *p)
@@ -1887,6 +1901,11 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 	u64 min_inversion_deadline = (~(u64)0);	// initialized with the max value
 	s64 min_inversion_budget = 0;
 
+	s64 rq_min_task_rib = 0;
+	int idle_time_scheduling_allowed = 1;
+	struct task_struct dummy_idle_task;
+
+
 	/* Step 1 */
 
 	/* Does current highest priority task allow priority inversion? */
@@ -1895,12 +1914,21 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 		//return pick_next_dl_entity(rq, dl_rq);
 
 	/* Compute the minimum inversion deadline m^t_{HP} */
+	rq_min_task_rib = leftmost_dl_se->reorder_rib;
 	for (j=0; j<taskset->task_count; j++) {
 		if (RB_EMPTY_NODE(&taskset->tasks[j]->dl.rb_node))
 			continue;	// This is not in dl_rq.
 
 		rq_task_count++;
 
+		/* Check if every task has positive rib so taht idle time scheduling is possible. */
+		if (taskset->tasks[j]->dl.reorder_rib <= 0)
+			idle_time_scheduling_allowed = 0;
+
+		if (taskset->tasks[j]->dl.reorder_rib < rq_min_task_rib)
+			rq_min_task_rib = taskset->tasks[j]->dl.reorder_rib;
+
+		/* Comparison for the minimum inversion deadline */
 		if ( (taskset->tasks[j]->dl.deadline > leftmost_dl_se->deadline) && (taskset->tasks[j]->dl.reorder_rib < 0) ) 
 			min_inversion_deadline = (taskset->tasks[j]->dl.deadline<min_inversion_deadline)?taskset->tasks[j]->dl.deadline:min_inversion_deadline;
 	}
@@ -1926,15 +1954,38 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 
 	/* If there is only one candidate (the leftmost one) then pick that one. */
 	if (candidate_count <= 1)
-		return leftmost_dl_se;
+		return leftmost_dl_se; 
 		//return pick_next_dl_entity(rq, dl_rq);
 
+
+#ifdef	REDF_IDLE_TIME_SCHEDULING
+	/* Criteria for the idle time scheduling: */
+
+	/* Check if idle task should be included. */
+	if ((candidate_count==rq_task_count) && (idle_time_scheduling_allowed==1)) {
+		rad_candidates[candidate_count] = &dummy_idle_task;
+		candidate_count++;
+		printk("redf: adding idle task in the candidate.");
+	}
+#endif
 
 	/* Setp 2 */
 
 	/* Select a random task. */
 	get_random_bytes(&rad_number, sizeof(rad_number)); // It's a system call from linux/random.h
 	rad_task = rad_candidates[do_div(rad_number,candidate_count)];
+
+#ifdef	REDF_IDLE_TIME_SCHEDULING
+	if (rad_task == &dummy_idle_task) {
+		if (0 == start_redf_pi_timer(&dl_rq->redf_pi_timer, rq_min_task_rib)) {
+			/* The timer somehow fails to start, so be safe and choose the leftmost task. */
+			return leftmost_dl_se;
+		} else {
+			printk("redf: idle task is selected - run for %lld", rq_min_task_rib);
+			return NULL;	// return null for idle time scheduling.
+		}
+	}
+#endif
 
 	/* If it is the leftmost task, then just return it. */
 	if (dl_rq->rb_leftmost == &rad_task->dl.rb_node) {
