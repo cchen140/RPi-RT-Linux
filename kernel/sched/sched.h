@@ -528,6 +528,8 @@ struct dl_rq {
 	/* reOrDer taskset */
 	struct reorder_taskset reorder_taskset;
 	struct hrtimer redf_pi_timer; /* priority inversion timer */
+	u64 redf_pi_timer_start_time; /* to store the start time of redf_pi_timer */
+	bool redf_idle_time_acting; /* idle time scheduling status */
 
 #ifdef CONFIG_SMP
 	/*

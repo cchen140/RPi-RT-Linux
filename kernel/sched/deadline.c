@@ -30,6 +30,7 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq, struct dl_
 void init_redf_pi_timer(struct hrtimer *timer);
 static int start_redf_pi_timer(struct hrtimer *timer, s64 pi_time_budget);
 void cancel_redf_pi_timer(struct hrtimer *timer);
+void update_rib_after_pi_idle_time(struct dl_rq *dl_rq);
 static void arbitrarily_remove_reorder_task_pointer(struct reorder_taskset *taskset, struct task_struct *p);
 
 struct dl_bandwidth def_dl_bandwidth;
@@ -90,6 +91,7 @@ void init_dl_rq(struct dl_rq *dl_rq)
 	/* initialize redf's variables */
 	dl_rq->reorder_taskset.task_count = 0;
 	init_redf_pi_timer(&dl_rq->redf_pi_timer);
+	dl_rq->redf_idle_time_acting = false;
 
 #ifdef CONFIG_SMP
 	/* zero means no -deadline tasks */
@@ -611,8 +613,10 @@ static enum hrtimer_restart dl_task_timer(struct hrtimer *timer)
 	struct task_struct *p = dl_task_of(dl_se);
 	struct rq_flags rf;
 	struct rq *rq;
+	struct dl_rq *dl_rq;
 
 	rq = task_rq_lock(p, &rf);
+	dl_rq = &rq->dl;
 
 	/*
 	 * The task might have changed its scheduling policy to something
@@ -677,11 +681,19 @@ static enum hrtimer_restart dl_task_timer(struct hrtimer *timer)
 	}
 #endif
 
+
+#ifdef	REDF_IDLE_TIME_SCHEDULING
+	if (dl_rq->redf_idle_time_acting == true) {
+		cancel_redf_pi_timer(&dl_rq->redf_pi_timer);
+		update_rib_after_pi_idle_time(dl_rq);
+	}
+#endif
+
 	enqueue_task_dl(rq, p, ENQUEUE_REPLENISH);
 	
 	/* In redf, we want to reschedule whenever a new job arrives. */	
-	if (dl_task(rq->curr))
-		resched_curr(rq);
+	resched_curr(rq);
+		
 	/* Original dl code block.
 	if (dl_task(rq->curr))
 		check_preempt_curr_dl(rq, p, 0);
@@ -1192,6 +1204,10 @@ pick_next_task_dl(struct rq *rq, struct task_struct *prev, struct pin_cookie coo
 	struct timespec ts_start, ts_end;
 
 	dl_rq = &rq->dl;
+
+	/* If the scheduled idle time is still active, then don't do scheduling. */
+	if (dl_rq->redf_idle_time_acting == true)
+		return NULL;
 
 	/* redf: to this point we are sure the tasks will be rescheduled, so 
 	 * stop previously started redf_pi_timer if any. 
@@ -1981,6 +1997,7 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 			/* The timer somehow fails to start, so be safe and choose the leftmost task. */
 			return leftmost_dl_se;
 		} else {
+			dl_rq->redf_idle_time_acting = true;
 			printk("redf: idle task is selected - run for %lld", rq_min_task_rib);
 			return NULL;	// return null for idle time scheduling.
 		}
@@ -2027,6 +2044,9 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 
 /* pi_time_budget is in nanoseconds. */
 static int start_redf_pi_timer(struct hrtimer *timer, s64 pi_time_budget) {
+	struct dl_rq *dl_rq = container_of(timer, struct dl_rq, redf_pi_timer);
+	struct rq *rq = rq_of_dl_rq(dl_rq);
+
 	ktime_t now, act;
 
 	now = hrtimer_cb_get_time(timer);
@@ -2045,6 +2065,9 @@ static int start_redf_pi_timer(struct hrtimer *timer, s64 pi_time_budget) {
 
 	hrtimer_start(timer, act, HRTIMER_MODE_ABS);
 
+	/* This is set for the idle time scheduling. */
+	dl_rq->redf_pi_timer_start_time = rq_clock_task(rq);
+
 	return 1;
 }
 
@@ -2057,6 +2080,14 @@ static enum hrtimer_restart redf_pi_timer(struct hrtimer *timer) {
 
 	sched_clock_tick();
 	update_rq_clock(rq);
+
+#ifdef REDF_IDLE_TIME_SCHEDULING
+	if (dl_rq->redf_idle_time_acting == true) {
+		update_rib_after_pi_idle_time(dl_rq);
+		dl_rq->redf_idle_time_acting = false;
+	}
+#endif
+
 	resched_curr(rq);
 
 	raw_spin_unlock(&rq->lock);
@@ -2071,8 +2102,31 @@ void init_redf_pi_timer(struct hrtimer *timer) {
 }
 
 void cancel_redf_pi_timer(struct hrtimer *timer) {
+	struct dl_rq *dl_rq = container_of(timer, struct dl_rq, redf_pi_timer);
+
 	if (hrtimer_is_queued(timer)) {
 		hrtimer_cancel(timer);
+	}
+#ifdef REDF_IDLE_TIME_SCHEDULING
+	dl_rq->redf_idle_time_acting = false;
+#endif
+}
+
+void update_rib_after_pi_idle_time(struct dl_rq *dl_rq) {
+	int i;
+	struct rq *rq = rq_of_dl_rq(dl_rq);
+	u64 delta_idle_time = rq_clock_task(rq) - dl_rq->redf_pi_timer_start_time;
+	struct reorder_taskset *taskset = &dl_rq->reorder_taskset;
+
+	/* redf: update the remaining inversion budget (RIB) for each task in the rq */
+	for (i=0; i<taskset->task_count; i++) {
+		if (RB_EMPTY_NODE(&taskset->tasks[i]->dl.rb_node))
+			continue;	// This is not in dl_rq.
+		
+		taskset->tasks[i]->dl.reorder_rib -= delta_idle_time;
+
+		if (taskset->tasks[i]->dl.reorder_rib < 0)
+			printk("Error: redf: rib becomes 0 after idle time. - %lld", taskset->tasks[i]->dl.reorder_rib);
 	}
 }
 
