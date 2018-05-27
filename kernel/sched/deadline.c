@@ -1997,8 +1997,8 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 			return leftmost_dl_se;
 		} else {
 			dl_rq->redf_idle_time_acting = true;
-			printk("redf: idle task is selected - run for %lld", rq_min_task_rib);
-			printk("redf: next scheduling point: %llu", scheduled_pi_timer_duration);
+			//printk("redf: idle task is selected - run for %lld", rq_min_task_rib);
+			//printk("redf: next scheduling point: %llu", scheduled_pi_timer_duration);
 			return NULL;	// return null for idle time scheduling.
 		}
 	}
@@ -2035,7 +2035,7 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 		get_random_bytes(&rad_number, sizeof(rad_number)); // It's a system call from linux/random.h
 		scheduled_pi_timer_duration = do_div(rad_number, scheduled_pi_timer_duration);
 
-		printk("redf: next scheduling point: %llu", scheduled_pi_timer_duration);
+		//printk("redf: next scheduling point: %llu", scheduled_pi_timer_duration);
 		if (0 == start_redf_pi_timer(&dl_rq->redf_pi_timer, min_inversion_budget)) {
 			/* The timer somehow fails to start, so be safe and choose the leftmost task. */
 			return leftmost_dl_se;
@@ -2097,12 +2097,12 @@ static enum hrtimer_restart redf_pi_timer(struct hrtimer *timer) {
 	sched_clock_tick();
 	update_rq_clock(rq);
 
-#ifdef REDF_IDLE_TIME_SCHEDULING
-	if (dl_rq->redf_idle_time_acting == true) {
-		update_rib_after_pi_idle_time(dl_rq);
-		dl_rq->redf_idle_time_acting = false;
+	if ((dl_rq->redf_mode==REDF_IDLE_TIME)||(dl_rq->redf_mode==REDF_FINE_GRAINED)) {
+		if (dl_rq->redf_idle_time_acting == true) {
+			update_rib_after_pi_idle_time(dl_rq);
+			dl_rq->redf_idle_time_acting = false;
+		}
 	}
-#endif
 
 	resched_curr(rq);
 
@@ -2123,9 +2123,9 @@ void cancel_redf_pi_timer(struct hrtimer *timer) {
 	if (hrtimer_is_queued(timer)) {
 		hrtimer_cancel(timer);
 	}
-#ifdef REDF_IDLE_TIME_SCHEDULING
+
+	/* Reset for the idle time scheduling mode. */
 	dl_rq->redf_idle_time_acting = false;
-#endif
 }
 
 void update_rib_after_pi_idle_time(struct dl_rq *dl_rq) {
