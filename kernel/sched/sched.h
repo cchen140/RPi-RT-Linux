@@ -508,6 +508,13 @@ struct rt_rq {
 #endif
 };
 
+/* redf scheduling modes */
+enum redf_scheduling_mode {
+	REDF_NORMAL,
+	REDF_IDLE_TIME,
+	REDF_FINE_GRAINED,
+};
+
 /*
  * reOrDer taskset structure
  */
@@ -530,6 +537,7 @@ struct dl_rq {
 	struct hrtimer redf_pi_timer; /* priority inversion timer */
 	u64 redf_pi_timer_start_time; /* to store the start time of redf_pi_timer */
 	bool redf_idle_time_acting; /* idle time scheduling status */
+	enum redf_scheduling_mode redf_mode;
 
 #ifdef CONFIG_SMP
 	/*

@@ -25,7 +25,7 @@
 #include <linux/timekeeping.h>
 
 /* for reOrDer */
-#define	REDF_IDLE_TIME_SCHEDULING	2	// Enable idle time scheduling in redf.
+#define CONFIG_REDF_MODE	REDF_FINE_GRAINED
 static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq, struct dl_rq *dl_rq);
 void init_redf_pi_timer(struct hrtimer *timer);
 static int start_redf_pi_timer(struct hrtimer *timer, s64 pi_time_budget);
@@ -92,6 +92,7 @@ void init_dl_rq(struct dl_rq *dl_rq)
 	dl_rq->reorder_taskset.task_count = 0;
 	init_redf_pi_timer(&dl_rq->redf_pi_timer);
 	dl_rq->redf_idle_time_acting = false;
+	dl_rq->redf_mode = CONFIG_REDF_MODE;
 
 #ifdef CONFIG_SMP
 	/* zero means no -deadline tasks */
@@ -681,13 +682,12 @@ static enum hrtimer_restart dl_task_timer(struct hrtimer *timer)
 	}
 #endif
 
-
-#ifdef	REDF_IDLE_TIME_SCHEDULING
-	if (dl_rq->redf_idle_time_acting == true) {
-		cancel_redf_pi_timer(&dl_rq->redf_pi_timer);
-		update_rib_after_pi_idle_time(dl_rq);
+	if ((dl_rq->redf_mode==REDF_IDLE_TIME) || (dl_rq->redf_mode==REDF_FINE_GRAINED)) {
+		if (dl_rq->redf_idle_time_acting == true) {
+			cancel_redf_pi_timer(&dl_rq->redf_pi_timer);
+			update_rib_after_pi_idle_time(dl_rq);
+		}
 	}
-#endif
 
 	enqueue_task_dl(rq, p, ENQUEUE_REPLENISH);
 	
@@ -1916,7 +1916,7 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 	struct sched_dl_entity *leftmost_dl_se = rb_entry(dl_rq->rb_leftmost, struct sched_dl_entity, rb_node);
 	u64 min_inversion_deadline = (~(u64)0);	// initialized with the max value
 	s64 min_inversion_budget = 0;
-
+	u64 scheduled_pi_timer_duration;
 	s64 rq_min_task_rib = 0;
 	int idle_time_scheduling_allowed = 1;
 	struct task_struct dummy_idle_task;
@@ -1974,16 +1974,14 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 		//return pick_next_dl_entity(rq, dl_rq);
 
 
-#ifdef	REDF_IDLE_TIME_SCHEDULING
-	/* Criteria for the idle time scheduling: */
-
-	/* Check if idle task should be included. */
-	if ((candidate_count==rq_task_count) && (idle_time_scheduling_allowed==1)) {
-		rad_candidates[candidate_count] = &dummy_idle_task;
-		candidate_count++;
-		//printk("redf: adding idle task in the candidate.");
+	if ((dl_rq->redf_mode==REDF_IDLE_TIME) || (dl_rq->redf_mode==REDF_FINE_GRAINED)) {
+		/* Check if idle task should be included. */
+		if ((candidate_count==rq_task_count) && (idle_time_scheduling_allowed==1)) {
+			rad_candidates[candidate_count] = &dummy_idle_task;
+			candidate_count++;
+			//printk("redf: adding idle task in the candidate.");
+		}
 	}
-#endif
 
 	/* Setp 2 */
 
@@ -1991,9 +1989,14 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 	get_random_bytes(&rad_number, sizeof(rad_number)); // It's a system call from linux/random.h
 	rad_task = rad_candidates[do_div(rad_number,candidate_count)];
 
-#ifdef	REDF_IDLE_TIME_SCHEDULING
-	if (rad_task == &dummy_idle_task) {
-		if (0 == start_redf_pi_timer(&dl_rq->redf_pi_timer, rq_min_task_rib)) {
+	if ( ((dl_rq->redf_mode==REDF_IDLE_TIME) || (dl_rq->redf_mode==REDF_FINE_GRAINED)) && (rad_task == &dummy_idle_task)) {
+		if (dl_rq->redf_mode == REDF_FINE_GRAINED) {
+			/* Randomize the scheduled idle time */
+			get_random_bytes(&rad_number, sizeof(rad_number)); // It's a system call from linux/random.h
+			scheduled_pi_timer_duration = do_div(rad_number, (u64)rq_min_task_rib);
+		}
+
+		if (0 == start_redf_pi_timer(&dl_rq->redf_pi_timer, scheduled_pi_timer_duration)) {
 			/* The timer somehow fails to start, so be safe and choose the leftmost task. */
 			return leftmost_dl_se;
 		} else {
@@ -2002,7 +2005,6 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 			return NULL;	// return null for idle time scheduling.
 		}
 	}
-#endif
 
 	/* If it is the leftmost task, then just return it. */
 	if (dl_rq->rb_leftmost == &rad_task->dl.rb_node) {
@@ -2027,19 +2029,35 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 		/* Priority inversion is not allowed for the chosen task. */
 		return leftmost_dl_se;
 		//return pick_next_dl_entity(rq, dl_rq);
-	} else if (rad_task->dl.runtime > min_inversion_budget) {
-		/* Start the priority inversion timer for the next scheduling point if 
-		 * the minimum inversion budget of higher priority tasks is smaller than
-		 * the chosen task's remaining computation time. */
-		//printk("redf: c > min_rib %lld", min_inversion_budget);
+	}
+
+	if (dl_rq->redf_mode == REDF_FINE_GRAINED) {
+		scheduled_pi_timer_duration = (rad_task->dl.runtime<min_inversion_budget)?rad_task->dl.runtime:min_inversion_budget;
+
+		/* Randomize time to next scheduling point.*/
+		get_random_bytes(&rad_number, sizeof(rad_number)); // It's a system call from linux/random.h
+		scheduled_pi_timer_duration = do_div(rad_number, scheduled_pi_timer_duration);
+
 		if (0 == start_redf_pi_timer(&dl_rq->redf_pi_timer, min_inversion_budget)) {
 			/* The timer somehow fails to start, so be safe and choose the leftmost task. */
 			return leftmost_dl_se;
-			//return pick_next_dl_entity(rq, dl_rq);
-		}
-	}
+		} 
 
-	return &rad_task->dl;
+		return &rad_task->dl;
+	} else {
+		 if (rad_task->dl.runtime > min_inversion_budget) {
+			/* Start the priority inversion timer for the next scheduling point if 
+			 * the minimum inversion budget of higher priority tasks is smaller than
+			 * the chosen task's remaining computation time. */
+			if (0 == start_redf_pi_timer(&dl_rq->redf_pi_timer, min_inversion_budget)) {
+				/* The timer somehow fails to start, so be safe and choose the leftmost task. */
+				return leftmost_dl_se;
+				//return pick_next_dl_entity(rq, dl_rq);
+			}
+		} 
+		
+		return &rad_task->dl;
+	}
 }
 
 /* pi_time_budget is in nanoseconds. */
