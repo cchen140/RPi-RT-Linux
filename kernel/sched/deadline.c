@@ -25,13 +25,13 @@
 #include <linux/timekeeping.h>
 
 /* for reOrDer */
-#define CONFIG_REDF_MODE	REDF_FINE_GRAINED
+#define CONFIG_REDF_MODE	REDF_NORMAL
 static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq, struct dl_rq *dl_rq);
 void init_redf_pi_timer(struct hrtimer *timer);
 static int start_redf_pi_timer(struct hrtimer *timer, s64 pi_time_budget);
 void cancel_redf_pi_timer(struct hrtimer *timer);
 void update_rib_after_pi_idle_time(struct dl_rq *dl_rq);
-static void arbitrarily_remove_reorder_task_pointer(struct reorder_taskset *taskset, struct task_struct *p);
+static void remove_redf_task_pointer(struct reorder_taskset *taskset, struct task_struct *p);
 
 struct dl_bandwidth def_dl_bandwidth;
 
@@ -1323,7 +1323,7 @@ static void task_dead_dl(struct task_struct *p)
 	struct reorder_taskset *taskset = &dl_rq_of_se(&p->dl)->reorder_taskset;
 
 	// Removing reOrDer tasks.
-	arbitrarily_remove_reorder_task_pointer(taskset, p);
+	remove_redf_task_pointer(taskset, p);
 	//printk("redf: pid[%d] is dead.", p->pid);
 
 	/*
@@ -1990,6 +1990,9 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 			/* Randomize the scheduled idle time */
 			get_random_bytes(&rad_number, sizeof(rad_number)); // It's a system call from linux/random.h
 			scheduled_pi_timer_duration = do_div(rad_number, (u64)rq_min_task_rib);
+		} else {
+			/* TODO: do not use the max possible value here. Use 80% of rq_min_task_rib instead. */
+			scheduled_pi_timer_duration = rq_min_task_rib;
 		}
 
 		if (0 == start_redf_pi_timer(&dl_rq->redf_pi_timer, scheduled_pi_timer_duration)) {
@@ -2150,7 +2153,7 @@ void update_rib_after_pi_idle_time(struct dl_rq *dl_rq) {
 }
 
 /* This function is for experiments. It assumes all tasks will be deleted at once. */
-static void arbitrarily_remove_reorder_task_pointer(struct reorder_taskset *taskset, struct task_struct *p) {
+static void remove_redf_task_pointer(struct reorder_taskset *taskset, struct task_struct *p) {
 	int j, deleted_task_index;
 	
 	/* Find the index of the deleted task in reorder_taskset. */
@@ -2166,10 +2169,10 @@ static void arbitrarily_remove_reorder_task_pointer(struct reorder_taskset *task
 		taskset->tasks[deleted_task_index] = taskset->tasks[taskset->task_count-1];
 	}
 	taskset->task_count--;
-	printk("redf: pid[%d] is deleted.", p->pid);
+	//printk("redf: pid[%d] is deleted.", p->pid);
 
 	if (taskset->task_count == 0) {
-		printk("reOrDer: all tasks are deleted.");
+		printk("redf: all tasks are deleted.");
 	}
 }
 

@@ -96,6 +96,9 @@ DEFINE_PER_CPU_SHARED_ALIGNED(struct rq, runqueues);
 
 static void update_rq_clock_task(struct rq *rq, s64 delta);
 
+/* redf functions */
+static void update_taskset_wcib(struct reorder_taskset *taskset);
+
 void update_rq_clock(struct rq *rq)
 {
 	s64 delta;
@@ -2923,8 +2926,15 @@ static struct rq *finish_task_switch(struct task_struct *prev)
 	if (mm)
 		mmdrop_delayed(mm);
 	if (unlikely(prev_state == TASK_DEAD)) {
-		if (prev->sched_class->task_dead)
+		if (prev->sched_class->task_dead) {
 			prev->sched_class->task_dead(prev);
+
+			if (prev->sched_class == &dl_sched_class) {
+				/* Now let's update redf's task-specific variables. */
+				printk("redf: pid[%d] is dead.", prev->pid);
+				update_taskset_wcib(&rq->dl.reorder_taskset);
+			}
+		}
 
 		put_task_struct(prev);
 	}
@@ -4412,35 +4422,38 @@ static s64 calculate_reorder_wcib(struct reorder_taskset *taskset, int task_inde
 	return taskset->tasks[task_index]->dl.dl_deadline - calculate_wcrt(taskset, task_index);	
 }
 
+static void update_taskset_wcib(struct reorder_taskset *taskset) {
+	int i;
+	taskset->r_cap = calculate_r_cap(taskset);
+	printk("redf: new r_cap value = %llu", taskset->r_cap);
+
+	printk("redf: new V_i values:");
+	/* Compute and update Vi (WCIB) for each task (while including the new task) */
+	for (i=0; i<taskset->task_count; i++) {
+		taskset->tasks[i]->dl.reorder_wcib = calculate_reorder_wcib(taskset, i);
+		printk("redf: V_%d = %llu.", i, taskset->tasks[i]->dl.reorder_wcib);
+	}
+}
+
 /* Actually do priority change: must hold pi & rq lock. */
 static void __setscheduler(struct rq *rq, struct task_struct *p,
 			   const struct sched_attr *attr, bool keep_boost)
 {
 	/* redf: initialize task's variables and update reOrDer's variables. */	
-	struct reorder_taskset *reorder_taskset;
+	struct reorder_taskset *taskset;
 	int policy;	
-
-	int i;	// for task iteration.
 
 	__setscheduler_params(p, attr);
 
 	policy = attr->sched_policy;
-	reorder_taskset = &rq->dl.reorder_taskset;
+	taskset = &rq->dl.reorder_taskset;
 	
 	if (dl_policy(policy)) {
 		/* Only new dl tasks will arrive here. Store this task. */
-		reorder_taskset->tasks[reorder_taskset->task_count] = p;
-		reorder_taskset->task_count++;
+		taskset->tasks[taskset->task_count] = p;
+		taskset->task_count++;
 
-		reorder_taskset->r_cap = calculate_r_cap(reorder_taskset);
-		printk("redf: new r_cap value = %llu", reorder_taskset->r_cap);
-
-		printk("redf: new V_i values:");
-		/* Compute and update Vi (WCIB) for each task (while including the new task) */
-		for (i=0; i<reorder_taskset->task_count; i++) {
-			reorder_taskset->tasks[i]->dl.reorder_wcib = calculate_reorder_wcib(reorder_taskset, i);
-			printk("redf: V_%d = %llu.", i, reorder_taskset->tasks[i]->dl.reorder_wcib);
-		}
+		update_taskset_wcib(taskset);
 	}
 	/* redf END */
 
