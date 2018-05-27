@@ -1927,7 +1927,6 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 	/* Does current highest priority task allow priority inversion? */
 	if (leftmost_dl_se->reorder_rib <= 0)
 		return leftmost_dl_se;
-		//return pick_next_dl_entity(rq, dl_rq);
 
 	/* Compute the minimum inversion deadline m^t_{HP} */
 	rq_min_task_rib = leftmost_dl_se->reorder_rib;
@@ -1949,9 +1948,6 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 			min_inversion_deadline = (taskset->tasks[j]->dl.deadline<min_inversion_deadline)?taskset->tasks[j]->dl.deadline:min_inversion_deadline;
 	}
 
-	/* Return the leftmost one if there is only one job in the rq. */
-	if (rq_task_count == 1)
-		return leftmost_dl_se;
 
 	/* Create a candidate list */
 	for (j=0; j<taskset->task_count; j++) {
@@ -1968,10 +1964,11 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 	 * list at this moment.
 	 */
 
-	/* If there is only one candidate (the leftmost one) then pick that one. */
-	if (candidate_count <= 1)
+	/* If it's NORMAL mode and there is only one candidate (the leftmost one) 
+	 * then pick that one. 
+	 */
+	if ((candidate_count<=1) && (dl_rq->redf_mode==REDF_NORMAL))
 		return leftmost_dl_se; 
-		//return pick_next_dl_entity(rq, dl_rq);
 
 
 	if ((dl_rq->redf_mode==REDF_IDLE_TIME) || (dl_rq->redf_mode==REDF_FINE_GRAINED)) {
@@ -1979,7 +1976,6 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 		if ((candidate_count==rq_task_count) && (idle_time_scheduling_allowed==1)) {
 			rad_candidates[candidate_count] = &dummy_idle_task;
 			candidate_count++;
-			//printk("redf: adding idle task in the candidate.");
 		}
 	}
 
@@ -2001,7 +1997,8 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 			return leftmost_dl_se;
 		} else {
 			dl_rq->redf_idle_time_acting = true;
-			//printk("redf: idle task is selected - run for %lld", rq_min_task_rib);
+			printk("redf: idle task is selected - run for %lld", rq_min_task_rib);
+			printk("redf: next scheduling point: %llu", scheduled_pi_timer_duration);
 			return NULL;	// return null for idle time scheduling.
 		}
 	}
@@ -2038,6 +2035,7 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 		get_random_bytes(&rad_number, sizeof(rad_number)); // It's a system call from linux/random.h
 		scheduled_pi_timer_duration = do_div(rad_number, scheduled_pi_timer_duration);
 
+		printk("redf: next scheduling point: %llu", scheduled_pi_timer_duration);
 		if (0 == start_redf_pi_timer(&dl_rq->redf_pi_timer, min_inversion_budget)) {
 			/* The timer somehow fails to start, so be safe and choose the leftmost task. */
 			return leftmost_dl_se;
