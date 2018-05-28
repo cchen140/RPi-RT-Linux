@@ -18,14 +18,17 @@
 
 #include <linux/slab.h>
 
-#include <linux/random.h>	// This is for reOrDer
+#include <linux/random.h>	// This is for randomization
 #include <asm/div64.h>		// This is for 64/32 bits devide operations. (do_div())
 #include <linux/ktime.h>
 #include <linux/time.h>
 #include <linux/timekeeping.h>
 
 /* for reOrDer */
-#define CONFIG_REDF_MODE	REDF_IDLE_TIME
+#define CONFIG_REDF_MODE	REDF_FINE_GRAINED
+#define	REDF_MIN_EXEC_DURATION	1000000	// 1ms
+#define	REDF_MIN_IDLE_TIME_DURATION	500000	// 500us
+#define	REDF_OVERHEAD_UPPER_BOUND_NS	100000	// 100us
 static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq, struct dl_rq *dl_rq);
 void init_redf_pi_timer(struct hrtimer *timer);
 static int start_redf_pi_timer(struct hrtimer *timer, s64 pi_time_budget);
@@ -2005,23 +2008,24 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 	get_random_bytes(&rad_number, sizeof(rad_number)); // It's a system call from linux/random.h
 	rad_task = rad_candidates[do_div(rad_number,candidate_count)];
 
+	/* If the "idle task" is selected: */
 	if ( ((dl_rq->redf_mode==REDF_IDLE_TIME) || (dl_rq->redf_mode==REDF_FINE_GRAINED)) && (rad_task == &dummy_idle_task)) {
 		if (dl_rq->redf_mode == REDF_FINE_GRAINED) {
 			/* Randomize the scheduled idle time */
-			get_random_bytes(&rad_number, sizeof(rad_number)); // It's a system call from linux/random.h
+			get_random_bytes(&rad_number, sizeof(rad_number));
 			scheduled_pi_timer_duration = do_div(rad_number, (u64)rq_min_task_rib);
 		} else {
-			/* TODO: do not use the max possible value here. Cost should be taken into account. */
 			scheduled_pi_timer_duration = (u64)rq_min_task_rib;
+		}
 
-			if (scheduled_pi_timer_duration > 500000) { // 500us
-				scheduled_pi_timer_duration -= 500000;
-			}
+		/* Take the redf overhead into account, some time should be deducted. */
+		if (scheduled_pi_timer_duration > REDF_OVERHEAD_UPPER_BOUND_NS) {
+			scheduled_pi_timer_duration -= REDF_OVERHEAD_UPPER_BOUND_NS;
+		}
 
-			if (scheduled_pi_timer_duration < 500000) {
-				printk(KERN_EMERG "redf: idle time too small, so return leftmost. - %llu", scheduled_pi_timer_duration);
-				return leftmost_dl_se;
-			}
+		if (scheduled_pi_timer_duration < REDF_MIN_IDLE_TIME_DURATION) {
+			//printk(KERN_EMERG "redf: idle time too small, so return leftmost. - %llu", scheduled_pi_timer_duration);
+			return leftmost_dl_se;
 		}
 
 		if (0 == start_redf_pi_timer(&dl_rq->redf_pi_timer, scheduled_pi_timer_duration)) {
@@ -2037,56 +2041,70 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 	}
 
 	/* If it is the leftmost task, then just return it. */
-	if (dl_rq->rb_leftmost == &rad_task->dl.rb_node) {
+	if (dl_rq->rb_leftmost == &rad_task->dl.rb_node)
 		return leftmost_dl_se;
-		//return pick_next_dl_entity(rq, dl_rq);
-	}	
 
-	/* Check if the chosen task's remaining runtime is less than 
-	 * the smallest rib in rq. */
+	/* 
+	 * To this point, we are sure that: 
+	 *   1. at least 2 candidates are in the list.
+	 *   2. the chosen job is not the leftmost one.
+	 */
+
+	/* Get the allowed minimum inversion duration. */
 	min_inversion_budget = leftmost_dl_se->reorder_rib;
 	for (j=0; j<taskset->task_count; j++) {
 		if (RB_EMPTY_NODE(&taskset->tasks[j]->dl.rb_node))
 			continue;	// This is not in dl_rq.
 
-		if (taskset->tasks[j]->dl.deadline <= rad_task->dl.deadline) {
+		if (taskset->tasks[j]->dl.deadline < rad_task->dl.deadline) {
 			if (taskset->tasks[j]->dl.reorder_rib < min_inversion_budget)
 				min_inversion_budget = taskset->tasks[j]->dl.reorder_rib;
 		}
 	}
 
+	/* Although the theory tells us that min_inversion_budget will definitely 
+	 * be positive, we place this check to verify this claim. */
 	if (min_inversion_budget <= 0) {
 		/* Priority inversion is not allowed for the chosen task. */
+		printk(KERN_ERR "ERROR: redf: min_inversion_budget becomes %lld.", min_inversion_budget);
 		return leftmost_dl_se;
-		//return pick_next_dl_entity(rq, dl_rq);
 	}
 
 
 	if (dl_rq->redf_mode == REDF_FINE_GRAINED) {
+		/* If the remaining runtime is too small then don't bother to randomize. */
+		if ((rad_task->dl.runtime<=min_inversion_budget) && (rad_task->dl.runtime<=REDF_MIN_EXEC_DURATION)) {
+			return &rad_task->dl;
+		}
+
 		scheduled_pi_timer_duration = (rad_task->dl.runtime<min_inversion_budget)?rad_task->dl.runtime:min_inversion_budget;
 
-		/* Randomize time to next scheduling point.*/
-		get_random_bytes(&rad_number, sizeof(rad_number)); // It's a system call from linux/random.h
-		// TODO: Could scheduled_pi_timer_duration be zero?
-		scheduled_pi_timer_duration = do_div(rad_number, scheduled_pi_timer_duration);
+		/* Randomize the duration if it's larger than the given minimum. */
+		if (scheduled_pi_timer_duration > REDF_MIN_EXEC_DURATION) {
+			/* Randomize time for next scheduling point.*/
+			get_random_bytes(&rad_number, sizeof(rad_number)); 
+			scheduled_pi_timer_duration = do_div(rad_number, scheduled_pi_timer_duration);
+
+			/* Make sure the duration is greater than the given minimum after randomization. */
+			if (scheduled_pi_timer_duration < REDF_MIN_EXEC_DURATION)
+				scheduled_pi_timer_duration = REDF_MIN_EXEC_DURATION;
+		} 
 
 		//printk("redf: next scheduling point: %llu", scheduled_pi_timer_duration);
-		if (0 == start_redf_pi_timer(&dl_rq->redf_pi_timer, min_inversion_budget)) {
+		if (0 == start_redf_pi_timer(&dl_rq->redf_pi_timer, scheduled_pi_timer_duration)) {
 			/* The timer somehow fails to start, so be safe and choose the leftmost task. */
 			return leftmost_dl_se;
 		} 
 
 		return &rad_task->dl;
-	} else {
+	} else { // for REDF_NORMAL or REDF_IDLE_TIME
 		 if (rad_task->dl.runtime > min_inversion_budget) {
-			printk(KERN_EMERG "redf: I'm here but I'm not.");
 			/* Start the priority inversion timer for the next scheduling point if 
 			 * the minimum inversion budget of higher priority tasks is smaller than
 			 * the chosen task's remaining computation time. */
 			if (0 == start_redf_pi_timer(&dl_rq->redf_pi_timer, min_inversion_budget)) {
 				/* The timer somehow fails to start, so be safe and choose the leftmost task. */
 				return leftmost_dl_se;
-				//return pick_next_dl_entity(rq, dl_rq);
 			}
 		} 
 		
