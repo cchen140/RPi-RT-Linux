@@ -2931,7 +2931,6 @@ static struct rq *finish_task_switch(struct task_struct *prev)
 
 			if (prev->sched_class == &dl_sched_class) {
 				/* Now let's update redf's task-specific variables. */
-				printk(KERN_EMERG "redf: pid[%d] is dead.", prev->pid);
 				update_taskset_wcib(&rq->dl.reorder_taskset);
 			}
 		}

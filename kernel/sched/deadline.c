@@ -25,9 +25,9 @@
 #include <linux/timekeeping.h>
 
 /* for reOrDer */
-#define CONFIG_REDF_MODE	REDF_FINE_GRAINED
+#define CONFIG_REDF_MODE	REDF_IDLE_TIME
 #define	REDF_MIN_EXEC_DURATION	1000000	// 1ms
-#define	REDF_MIN_IDLE_TIME_DURATION	500000	// 500us
+#define	REDF_MIN_IDLE_TIME_DURATION	1000000	// 1ms
 #define	REDF_OVERHEAD_UPPER_BOUND_NS	100000	// 100us
 static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq, struct dl_rq *dl_rq);
 void init_redf_pi_timer(struct hrtimer *timer);
@@ -685,7 +685,7 @@ static enum hrtimer_restart dl_task_timer(struct hrtimer *timer)
 	}
 #endif
 
-	printk(KERN_EMERG "redf: task [%d] hrtimer up", p->pid);
+	//printk("redf: task [%d] hrtimer up", p->pid);
 	if ((dl_rq->redf_mode==REDF_IDLE_TIME) || (dl_rq->redf_mode==REDF_FINE_GRAINED)) {
 		if (dl_rq->redf_idle_time_acting == true) {
 			cancel_redf_pi_timer(&dl_rq->redf_pi_timer);
@@ -802,8 +802,7 @@ static void update_curr_dl(struct rq *rq)
 
 	dl_se->runtime -= delta_exec;
 
-	/* reOrDer: update the remaining inversion budget (RIB) for each of lower priority tasks */
-	printk(KERN_EMERG "redf: I'm in update_curr_dl");
+	/* redf: update the remaining inversion budget (RIB) for each of lower priority tasks */
 	for (i=0; i<reorder_taskset->task_count; i++) {
 		if (reorder_taskset->tasks[i] == curr)
 			continue;
@@ -816,7 +815,7 @@ static void update_curr_dl(struct rq *rq)
 				reorder_taskset->tasks[i]->dl.reorder_rib -= delta_exec;
 				if (reorder_taskset->tasks[i]->dl.reorder_rib <= 0) {
 					need_reschedule++;
-					//printk("ERROR: redf: Task[%d]'s RIB became negative when running Task-%d.", i, curr->pid);
+					//printk("redf: Task[%d]'s RIB became negative when running Task-%d.", i, curr->pid);
 				}
 			}
 		}
@@ -1217,10 +1216,6 @@ pick_next_task_dl(struct rq *rq, struct task_struct *prev, struct pin_cookie coo
 
 	/* If the scheduled idle time is still active, then don't do scheduling. */
 	if (dl_rq->redf_idle_time_acting == true) {
-		if (prev->sched_class == &dl_sched_class) {
-			printk(KERN_EMERG "ERROR: redf: Oh? Should we be here?");
-			update_curr_dl(rq);
-		}
 		return NULL;
 	}
 
@@ -1259,7 +1254,11 @@ pick_next_task_dl(struct rq *rq, struct task_struct *prev, struct pin_cookie coo
 	if (unlikely(!dl_rq->dl_nr_running))
 		return NULL;
 
-	//xxxxput_prev_task(rq, prev);
+	/* This line was commented to solve the problem that causes kernel to crash
+	 * when the redf's idle time is active. This call has been moved to after the
+	 * "else" below.
+	 */
+	//put_prev_task(rq, prev);
 
 	getnstimeofday(&ts_start);
 	//dl_se = pick_next_dl_entity(rq, dl_rq);
@@ -1271,22 +1270,23 @@ pick_next_task_dl(struct rq *rq, struct task_struct *prev, struct pin_cookie coo
 	if (dl_se == NULL) {
 		/* idle task is picked. */
 
-		printk(KERN_EMERG "redf: idle task picked, redf(idle) overhead = %ld +ns. %ld", (ts_end.tv_sec - ts_start.tv_sec), (ts_end.tv_nsec - ts_start.tv_nsec));
+		printk("redf: idle task picked, redf(idle) overhead = %ld +ns. %ld", (ts_end.tv_sec - ts_start.tv_sec), (ts_end.tv_nsec - ts_start.tv_nsec));
 		return NULL;
 	} else {
 		/* Non-idle task is picked. */
-		put_prev_task(rq, prev);//xxxxx
+
+		// This line was moved here from above.
+		put_prev_task(rq, prev);
 
 		p = dl_task_of(dl_se);
 		p->se.exec_start = rq_clock_task(rq);
 
-		/* reOrDer: Benchmark message output. */
+		/* redf: Benchmark message output. */
 		if (&dl_se->rb_node == dl_rq->rb_leftmost) {
-			printk(KERN_EMERG "redf: pid[%d] picked, redf(leftmost) overhead = %ld +ns. %ld", p->pid, (ts_end.tv_sec - ts_start.tv_sec), (ts_end.tv_nsec - ts_start.tv_nsec));
+			printk("redf: pid[%d] picked, redf(leftmost) overhead = %ld +ns. %ld", p->pid, (ts_end.tv_sec - ts_start.tv_sec), (ts_end.tv_nsec - ts_start.tv_nsec));
 		} else {
-			printk(KERN_EMERG "redf: pid[%d] picked, redf(rad) overhead = %ld +ns. %ld", p->pid, (ts_end.tv_sec - ts_start.tv_sec), (ts_end.tv_nsec - ts_start.tv_nsec));
+			printk("redf: pid[%d] picked, redf(rad) overhead = %ld +ns. %ld", p->pid, (ts_end.tv_sec - ts_start.tv_sec), (ts_end.tv_nsec - ts_start.tv_nsec));
 		}
-		//printk("redf: pid[%d] is picked.", p->pid);	// log for redf
 
 		/* Running task will never be pushed. */
 		dequeue_pushable_dl_task(rq, p);
@@ -1978,11 +1978,10 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 	}
 
 	/* Note that at least the highest priority task will be in the candidate 
-	 * list at this moment.xxxxx
+	 * list at this moment. We place this check here to track the status.
 	 */
-
 	if (candidate_count == 0) {
-		printk(KERN_EMERG "ERROR: redf: candidate list is empty!");
+		printk(KERN_ERR "ERROR: redf: candidate list is empty.");
 		return leftmost_dl_se; 
 	}
 	
@@ -2024,17 +2023,17 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 		}
 
 		if (scheduled_pi_timer_duration < REDF_MIN_IDLE_TIME_DURATION) {
-			//printk(KERN_EMERG "redf: idle time too small, so return leftmost. - %llu", scheduled_pi_timer_duration);
+			//printk("redf: idle time too small, so return leftmost => %llu", scheduled_pi_timer_duration);
 			return leftmost_dl_se;
 		}
 
 		if (0 == start_redf_pi_timer(&dl_rq->redf_pi_timer, scheduled_pi_timer_duration)) {
 			/* The timer somehow fails to start, so be safe and choose the leftmost task. */
-			printk(KERN_EMERG "ERROR: redf: idle timer fails to start!!");
+			printk(KERN_ERR "ERROR: redf: idle timer failed to start.");
 			return leftmost_dl_se;
 		} else {
 			dl_rq->redf_idle_time_acting = true;
-			printk(KERN_EMERG "redf: %llu idle task is selected - run for %lld", rq_task_count, scheduled_pi_timer_duration);
+			//printk("redf: idle task is selected => run for %lld", scheduled_pi_timer_duration);
 			//printk("redf: next scheduling point: %llu", scheduled_pi_timer_duration);
 			return NULL;	// return null for idle time scheduling.
 		}
@@ -2138,7 +2137,7 @@ static int start_redf_pi_timer(struct hrtimer *timer, s64 pi_time_budget) {
 	/* This is set for the idle time scheduling. */
 	dl_rq->redf_pi_timer_start_time = rq_clock_task(rq);
 
-	printk(KERN_EMERG "edf: pi_timer starts %lld", pi_time_budget);
+	//printk("edf: pi_timer starts %lld", pi_time_budget);
 
 	return 1;
 }
@@ -2148,14 +2147,12 @@ static enum hrtimer_restart redf_pi_timer(struct hrtimer *timer) {
 	struct dl_rq *dl_rq = container_of(timer, struct dl_rq, redf_pi_timer);
 	struct rq *rq = rq_of_dl_rq(dl_rq);
 
-	printk(KERN_EMERG "redf: idle timer is up waiting spin lock");
-
 	raw_spin_lock(&rq->lock);
 
 	sched_clock_tick();
 	update_rq_clock(rq);
 
-	printk(KERN_EMERG "redf: idle timer is up");
+	//printk("redf: pi_timer is up");
 	if ((dl_rq->redf_mode==REDF_IDLE_TIME)||(dl_rq->redf_mode==REDF_FINE_GRAINED)) {
 		if (dl_rq->redf_idle_time_acting == true) {
 			update_rib_after_pi_idle_time(dl_rq);
@@ -2181,7 +2178,7 @@ void cancel_redf_pi_timer(struct hrtimer *timer) {
 
 	if (hrtimer_is_queued(timer)) {
 		hrtimer_cancel(timer);
-		printk(KERN_EMERG "redf: pi_timer is canceled.");
+		//printk("redf: pi_timer is canceled.");
 	}
 
 	/* Reset for the idle time scheduling mode. */
@@ -2205,12 +2202,14 @@ void update_rib_after_pi_idle_time(struct dl_rq *dl_rq) {
 		taskset->tasks[i]->dl.reorder_rib -= delta_idle_time;
 
 		/* Due to context swtich overhead, consumed time may be more than what we scheduled. 
-		 * This should already be avoided by limiting the scheduled idle time to 90% of its
-		 * maximum possible time. */
+		 * This should already be avoided by taking the overhead into account when setting
+		 * the scheduled idle time. */
+		/*
 		if (taskset->tasks[i]->dl.reorder_rib < 0)
-			printk(KERN_EMERG "redf: rib becomes 0 after idle time. - %lld", taskset->tasks[i]->dl.reorder_rib);
+			printk("redf: rib becomes 0 after idle time. - %lld", taskset->tasks[i]->dl.reorder_rib);
+		*/
 	}
-	printk(KERN_EMERG "redf: %llu update rib after idle time.", rq_task_count);
+	//printk("redf: %llu update rib after idle time.", rq_task_count);
 }
 
 /* This function is for experiments. It assumes all tasks will be deleted at once. */
