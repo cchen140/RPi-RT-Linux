@@ -1163,7 +1163,7 @@ pick_next_task_dl(struct rq *rq, struct task_struct *prev, struct pin_cookie coo
 
 	getnstimeofday(&ts_start);
 	dl_se = pick_next_dl_entity(rq, dl_rq);
-	getnstimeofday(&ts_start);
+	getnstimeofday(&ts_end);
 
 	BUG_ON(!dl_se);
 
