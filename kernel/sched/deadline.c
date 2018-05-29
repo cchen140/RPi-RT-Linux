@@ -1125,6 +1125,9 @@ pick_next_task_dl(struct rq *rq, struct task_struct *prev, struct pin_cookie coo
 	struct task_struct *p;
 	struct dl_rq *dl_rq;
 
+	// Benchmark variables
+	struct timespec ts_start, ts_end;
+
 	dl_rq = &rq->dl;
 
 	if (need_pull_dl_task(rq, prev)) {
@@ -1158,11 +1161,17 @@ pick_next_task_dl(struct rq *rq, struct task_struct *prev, struct pin_cookie coo
 
 	put_prev_task(rq, prev);
 
+	getnstimeofday(&ts_start);
 	dl_se = pick_next_dl_entity(rq, dl_rq);
+	getnstimeofday(&ts_start);
+
 	BUG_ON(!dl_se);
 
 	p = dl_task_of(dl_se);
 	p->se.exec_start = rq_clock_task(rq);
+
+	/* Benchmark message output. */
+	printk("redf: pid[%d] picked, redf(leftmost) overhead = %ld +ns. %ld", p->pid, (ts_end.tv_sec - ts_start.tv_sec), (ts_end.tv_nsec - ts_start.tv_nsec));
 
 	/* Running task will never be pushed. */
        dequeue_pushable_dl_task(rq, p);
