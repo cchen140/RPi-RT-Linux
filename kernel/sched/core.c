@@ -97,7 +97,7 @@ DEFINE_PER_CPU_SHARED_ALIGNED(struct rq, runqueues);
 static void update_rq_clock_task(struct rq *rq, s64 delta);
 
 /* redf functions */
-static void update_taskset_wcib(struct reorder_taskset *taskset);
+static void update_taskset_wcib(struct redf_taskset *taskset);
 
 void update_rq_clock(struct rq *rq)
 {
@@ -2931,7 +2931,7 @@ static struct rq *finish_task_switch(struct task_struct *prev)
 
 			if (prev->sched_class == &dl_sched_class) {
 				/* Now let's update redf's task-specific variables. */
-				update_taskset_wcib(&rq->dl.reorder_taskset);
+				update_taskset_wcib(&rq->dl.redf_taskset);
 			}
 		}
 
@@ -4312,7 +4312,7 @@ static void __setscheduler_params(struct task_struct *p,
  * Given task i (task_index), compute the upper bound of the experienced interference:
  * I_i(t) = sum{ min[ceil(Di/Tj)+1, 1+floor[(t+Di-Dj)/Tj]+1] * Cj} | j~=i, Dj <= t+Di
  */
-static u64 calculate_interference_relative_to_time(struct reorder_taskset *taskset, int task_index, u64 t) {
+static u64 calculate_interference_relative_to_time(struct redf_taskset *taskset, int task_index, u64 t) {
 	int j; // for task iteration
 	u64 interference=0, interference_from_j, interference_from_j_2, remainder;
 
@@ -4346,7 +4346,7 @@ static u64 calculate_interference_relative_to_time(struct reorder_taskset *tasks
 /*
  * R_i(t) = max{Ci, W_i(t) - t}
  */
-static u64 calculate_response_time_relative_to_time(struct reorder_taskset *taskset, int task_index, u64 t) {
+static u64 calculate_response_time_relative_to_time(struct redf_taskset *taskset, int task_index, u64 t) {
 	u64 w_i_at_t;
 
 	/* W_i(t) = [floor(t/Ti) + 1]*Ci + I_i(t) */
@@ -4363,7 +4363,7 @@ static u64 calculate_response_time_relative_to_time(struct reorder_taskset *task
 /*
  * cap(R) = r^k when r^k == r^{k+1}, r^0 = sum(Cj)
  */
-static u64 calculate_r_cap_recursion(struct reorder_taskset *taskset, int progress, u64 last_r_value) {
+static u64 calculate_r_cap_recursion(struct redf_taskset *taskset, int progress, u64 last_r_value) {
 	int j; // for task iteration
 	u64 current_r_value = 0;
 	u64 last_r_value_dividend;
@@ -4391,14 +4391,14 @@ static u64 calculate_r_cap_recursion(struct reorder_taskset *taskset, int progre
 /*
  * Calculate R cap which is needed for calculating a task's WCRT.
  */
-static u64 calculate_r_cap(struct reorder_taskset *taskset) {
+static u64 calculate_r_cap(struct redf_taskset *taskset) {
 	return calculate_r_cap_recursion(taskset, 0, 0);
 }
 
 /*
  * Calculate the worst case response time (WCRT) of the given task.
  */
-static u64 calculate_wcrt(struct reorder_taskset *taskset, int task_index) {
+static u64 calculate_wcrt(struct redf_taskset *taskset, int task_index) {
 	u64 t;
 	u64 wcrt = 0, wcrt_at_t = 0;
 	u64 t_max = taskset->r_cap - taskset->tasks[task_index]->dl.dl_runtime;
@@ -4417,11 +4417,11 @@ static u64 calculate_wcrt(struct reorder_taskset *taskset, int task_index) {
  * V_i = D_i - R_i, where D_i is the relative deadline and R_i is the worst
  * case response time (WCRT).
  */
-static s64 calculate_reorder_wcib(struct reorder_taskset *taskset, int task_index) {
+static s64 calculate_redf_wcib(struct redf_taskset *taskset, int task_index) {
 	return taskset->tasks[task_index]->dl.dl_deadline - calculate_wcrt(taskset, task_index);	
 }
 
-static void update_taskset_wcib(struct reorder_taskset *taskset) {
+static void update_taskset_wcib(struct redf_taskset *taskset) {
 	int i;
 	taskset->r_cap = calculate_r_cap(taskset);
 	printk("redf: new r_cap value = %llu", taskset->r_cap);
@@ -4429,8 +4429,8 @@ static void update_taskset_wcib(struct reorder_taskset *taskset) {
 	printk("redf: new V_i values:");
 	/* Compute and update Vi (WCIB) for each task (while including the new task) */
 	for (i=0; i<taskset->task_count; i++) {
-		taskset->tasks[i]->dl.reorder_wcib = calculate_reorder_wcib(taskset, i);
-		printk("redf: V_%d = %llu.", i, taskset->tasks[i]->dl.reorder_wcib);
+		taskset->tasks[i]->dl.redf_wcib = calculate_redf_wcib(taskset, i);
+		printk("redf: V_%d = %llu.", i, taskset->tasks[i]->dl.redf_wcib);
 	}
 }
 
@@ -4438,14 +4438,14 @@ static void update_taskset_wcib(struct reorder_taskset *taskset) {
 static void __setscheduler(struct rq *rq, struct task_struct *p,
 			   const struct sched_attr *attr, bool keep_boost)
 {
-	/* redf: initialize task's variables and update reOrDer's variables. */	
-	struct reorder_taskset *taskset;
+	/* redf: initialize task's variables and update redf's variables. */	
+	struct redf_taskset *taskset;
 	int policy;	
 
 	__setscheduler_params(p, attr);
 
 	policy = attr->sched_policy;
-	taskset = &rq->dl.reorder_taskset;
+	taskset = &rq->dl.redf_taskset;
 	
 	if (dl_policy(policy)) {
 		/* Only new dl tasks will arrive here. Store this task. */

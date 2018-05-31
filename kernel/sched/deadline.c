@@ -24,8 +24,8 @@
 #include <linux/time.h>
 #include <linux/timekeeping.h>
 
-/* for reOrDer */
-#define CONFIG_REDF_MODE	REDF_IDLE_TIME
+/* for redf */
+#define CONFIG_REDF_MODE	REDF_FINE_GRAINED
 #define	REDF_MIN_EXEC_DURATION	1000000	// 1ms
 #define	REDF_MIN_IDLE_TIME_DURATION	1000000	// 1ms
 #define	REDF_OVERHEAD_UPPER_BOUND_NS	100000	// 100us
@@ -34,7 +34,7 @@ void init_redf_pi_timer(struct hrtimer *timer);
 static int start_redf_pi_timer(struct hrtimer *timer, s64 pi_time_budget);
 void cancel_redf_pi_timer(struct hrtimer *timer);
 void update_rib_after_pi_idle_time(struct dl_rq *dl_rq);
-static void remove_redf_task_pointer(struct reorder_taskset *taskset, struct task_struct *p);
+static void remove_redf_task_pointer(struct redf_taskset *taskset, struct task_struct *p);
 
 struct dl_bandwidth def_dl_bandwidth;
 
@@ -92,7 +92,7 @@ void init_dl_rq(struct dl_rq *dl_rq)
 	dl_rq->rb_root = RB_ROOT;
 
 	/* initialize redf's variables */
-	dl_rq->reorder_taskset.task_count = 0;
+	dl_rq->redf_taskset.task_count = 0;
 	init_redf_pi_timer(&dl_rq->redf_pi_timer);
 	dl_rq->redf_idle_time_acting = false;
 	dl_rq->redf_mode = CONFIG_REDF_MODE;
@@ -383,7 +383,7 @@ static inline void setup_new_dl_entity(struct sched_dl_entity *dl_se)
 	dl_se->runtime = dl_se->dl_runtime;
 
 	/* redf variables. Note that this is only called when a task is created. */
-	dl_se->reorder_rib = dl_se->reorder_wcib;
+	dl_se->redf_rib = dl_se->redf_wcib;
 }
 
 /*
@@ -435,7 +435,7 @@ static void replenish_dl_entity(struct sched_dl_entity *dl_se,
 		dl_se->runtime += pi_se->dl_runtime;
 
 		// redf: reset the task's inversion budget.
-		dl_se->reorder_rib = pi_se->reorder_wcib;
+		dl_se->redf_rib = pi_se->redf_wcib;
 	}
 
 	/*
@@ -453,7 +453,7 @@ static void replenish_dl_entity(struct sched_dl_entity *dl_se,
 		dl_se->runtime = pi_se->dl_runtime;
 
 		// redf: reset the task's inversion budget.
-		dl_se->reorder_rib = pi_se->reorder_wcib;
+		dl_se->redf_rib = pi_se->redf_wcib;
 	}
 
 	if (dl_se->dl_yielded)
@@ -537,7 +537,7 @@ static void update_dl_entity(struct sched_dl_entity *dl_se,
 		dl_se->runtime = pi_se->dl_runtime;
 
 		// redf: reset the task's inversion budget.
-		dl_se->reorder_rib = pi_se->reorder_wcib;
+		dl_se->redf_rib = pi_se->redf_wcib;
 	}
 }
 
@@ -762,7 +762,7 @@ static void update_curr_dl(struct rq *rq)
 	u64 delta_exec;
 	int i, need_reschedule = 0;
 
-	struct reorder_taskset *reorder_taskset = &rq->dl.reorder_taskset;
+	struct redf_taskset *redf_taskset = &rq->dl.redf_taskset;
 
 	// No need to update a thing if we are in (redf-scheduled) idle time.
 	if (dl_rq->redf_idle_time_acting == true)
@@ -803,17 +803,17 @@ static void update_curr_dl(struct rq *rq)
 	dl_se->runtime -= delta_exec;
 
 	/* redf: update the remaining inversion budget (RIB) for each of lower priority tasks */
-	for (i=0; i<reorder_taskset->task_count; i++) {
-		if (reorder_taskset->tasks[i] == curr)
+	for (i=0; i<redf_taskset->task_count; i++) {
+		if (redf_taskset->tasks[i] == curr)
 			continue;
-		if (reorder_taskset->tasks[i]->dl.deadline <= dl_se->deadline) {
+		if (redf_taskset->tasks[i]->dl.deadline <= dl_se->deadline) {
 			/* Only decrease a job's rib if it is not a newly arrived job. 
 			 * A new job is always arrived before this update_curr_dl() is called,
 			 * so it is necessary to exclude such new jobs.
 			 */
-			if ((reorder_taskset->tasks[i]->dl.deadline-reorder_taskset->tasks[i]->dl.dl_period) <= (rq_clock_task(rq)-delta_exec)) {		
-				reorder_taskset->tasks[i]->dl.reorder_rib -= delta_exec;
-				if (reorder_taskset->tasks[i]->dl.reorder_rib <= 0) {
+			if ((redf_taskset->tasks[i]->dl.deadline-redf_taskset->tasks[i]->dl.dl_period) <= (rq_clock_task(rq)-delta_exec)) {		
+				redf_taskset->tasks[i]->dl.redf_rib -= delta_exec;
+				if (redf_taskset->tasks[i]->dl.redf_rib <= 0) {
 					need_reschedule++;
 					//printk("redf: Task[%d]'s RIB became negative when running Task-%d.", i, curr->pid);
 				}
@@ -832,7 +832,7 @@ throttle:
 			resched_curr(rq);
 	}
 
-	/* reOrDer: Some tasks' RIBs reach 0. */
+	/* redf: Some tasks' RIBs reach 0. */
 	if (need_reschedule > 0) {
 		resched_curr(rq);
 	}
@@ -1337,9 +1337,9 @@ static void task_fork_dl(struct task_struct *p)
 static void task_dead_dl(struct task_struct *p)
 {
 	struct dl_bw *dl_b = dl_bw_of(task_cpu(p));
-	struct reorder_taskset *taskset = &dl_rq_of_se(&p->dl)->reorder_taskset;
+	struct redf_taskset *taskset = &dl_rq_of_se(&p->dl)->redf_taskset;
 
-	// Removing reOrDer tasks.
+	// Removing redf tasks.
 	remove_redf_task_pointer(taskset, p);
 	//printk("redf: pid[%d] is dead.", p->pid);
 
@@ -1929,7 +1929,7 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 	u64 rq_task_count = 0;
 	u64 candidate_count = 0;
 	struct task_struct *rad_task;
-	struct reorder_taskset *taskset = &dl_rq->reorder_taskset;
+	struct redf_taskset *taskset = &dl_rq->redf_taskset;
 	struct sched_dl_entity *leftmost_dl_se = rb_entry(dl_rq->rb_leftmost, struct sched_dl_entity, rb_node);
 	u64 min_inversion_deadline = (~(u64)0);	// initialized with the max value
 	s64 min_inversion_budget = 0;
@@ -1942,11 +1942,11 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 	/* Step 1 */
 
 	/* Does current highest priority task allow priority inversion? */
-	if (leftmost_dl_se->reorder_rib <= 0)
+	if (leftmost_dl_se->redf_rib <= 0)
 		return leftmost_dl_se;
 
 	/* Compute the minimum inversion deadline m^t_{HP} */
-	rq_min_task_rib = leftmost_dl_se->reorder_rib;
+	rq_min_task_rib = leftmost_dl_se->redf_rib;
 	for (j=0; j<taskset->task_count; j++) {
 		if (RB_EMPTY_NODE(&taskset->tasks[j]->dl.rb_node))
 			continue;	// This is not in dl_rq.
@@ -1954,14 +1954,14 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 		rq_task_count++;
 
 		/* Check if every task has positive rib so taht idle time scheduling is possible. */
-		if (taskset->tasks[j]->dl.reorder_rib <= 0)
+		if (taskset->tasks[j]->dl.redf_rib <= 0)
 			idle_time_scheduling_allowed = 0;
 
-		if (taskset->tasks[j]->dl.reorder_rib < rq_min_task_rib)
-			rq_min_task_rib = taskset->tasks[j]->dl.reorder_rib;
+		if (taskset->tasks[j]->dl.redf_rib < rq_min_task_rib)
+			rq_min_task_rib = taskset->tasks[j]->dl.redf_rib;
 
 		/* Comparison for the minimum inversion deadline */
-		if ( (taskset->tasks[j]->dl.deadline > leftmost_dl_se->deadline) && (taskset->tasks[j]->dl.reorder_rib < 0) ) 
+		if ( (taskset->tasks[j]->dl.deadline > leftmost_dl_se->deadline) && (taskset->tasks[j]->dl.redf_rib < 0) ) 
 			min_inversion_deadline = (taskset->tasks[j]->dl.deadline<min_inversion_deadline)?taskset->tasks[j]->dl.deadline:min_inversion_deadline;
 	}
 
@@ -2050,14 +2050,14 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 	 */
 
 	/* Get the allowed minimum inversion duration. */
-	min_inversion_budget = leftmost_dl_se->reorder_rib;
+	min_inversion_budget = leftmost_dl_se->redf_rib;
 	for (j=0; j<taskset->task_count; j++) {
 		if (RB_EMPTY_NODE(&taskset->tasks[j]->dl.rb_node))
 			continue;	// This is not in dl_rq.
 
 		if (taskset->tasks[j]->dl.deadline < rad_task->dl.deadline) {
-			if (taskset->tasks[j]->dl.reorder_rib < min_inversion_budget)
-				min_inversion_budget = taskset->tasks[j]->dl.reorder_rib;
+			if (taskset->tasks[j]->dl.redf_rib < min_inversion_budget)
+				min_inversion_budget = taskset->tasks[j]->dl.redf_rib;
 		}
 	}
 
@@ -2189,7 +2189,7 @@ void update_rib_after_pi_idle_time(struct dl_rq *dl_rq) {
 	int i;
 	struct rq *rq = rq_of_dl_rq(dl_rq);
 	u64 delta_idle_time = rq_clock_task(rq) - dl_rq->redf_pi_timer_start_time;
-	struct reorder_taskset *taskset = &dl_rq->reorder_taskset;
+	struct redf_taskset *taskset = &dl_rq->redf_taskset;
 	u64 rq_task_count = 0;
 
 	/* redf: update the remaining inversion budget (RIB) for each task in the rq */
@@ -2199,24 +2199,24 @@ void update_rib_after_pi_idle_time(struct dl_rq *dl_rq) {
 		
 		rq_task_count++;
 
-		taskset->tasks[i]->dl.reorder_rib -= delta_idle_time;
+		taskset->tasks[i]->dl.redf_rib -= delta_idle_time;
 
 		/* Due to context swtich overhead, consumed time may be more than what we scheduled. 
 		 * This should already be avoided by taking the overhead into account when setting
 		 * the scheduled idle time. */
 		/*
-		if (taskset->tasks[i]->dl.reorder_rib < 0)
-			printk("redf: rib becomes 0 after idle time. - %lld", taskset->tasks[i]->dl.reorder_rib);
+		if (taskset->tasks[i]->dl.redf_rib < 0)
+			printk("redf: rib becomes 0 after idle time. - %lld", taskset->tasks[i]->dl.redf_rib);
 		*/
 	}
 	//printk("redf: %llu update rib after idle time.", rq_task_count);
 }
 
 /* This function is for experiments. It assumes all tasks will be deleted at once. */
-static void remove_redf_task_pointer(struct reorder_taskset *taskset, struct task_struct *p) {
+static void remove_redf_task_pointer(struct redf_taskset *taskset, struct task_struct *p) {
 	int j, deleted_task_index;
 	
-	/* Find the index of the deleted task in reorder_taskset. */
+	/* Find the index of the deleted task in redf_taskset. */
 	for (j=0; j<taskset->task_count; j++) {
 		if (taskset->tasks[j] == p) {
 			deleted_task_index = j;

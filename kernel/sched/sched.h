@@ -516,9 +516,9 @@ enum redf_scheduling_mode {
 };
 
 /*
- * reOrDer taskset structure
+ * redf taskset structure
  */
-struct reorder_taskset {
+struct redf_taskset {
 	struct task_struct *tasks[30];
 	int task_count;
 	u64 r_cap; /* the maximum workload of the taskset */
@@ -532,8 +532,8 @@ struct dl_rq {
 
 	unsigned long dl_nr_running;
 
-	/* reOrDer taskset */
-	struct reorder_taskset reorder_taskset;
+	/* redf taskset */
+	struct redf_taskset redf_taskset;
 	struct hrtimer redf_pi_timer; /* priority inversion timer */
 	u64 redf_pi_timer_start_time; /* to store the start time of redf_pi_timer */
 	bool redf_idle_time_acting; /* idle time scheduling status */
