@@ -76,6 +76,8 @@
 #include <linux/frame.h>
 #include <linux/prefetch.h>
 
+#include <linux/math64.h>	// for u64 div64_u64(u64 dividend, u64 divisor) and u64 div64_u64_rem(u64 dividend, u64 divisor, u64 *remainder)
+
 #include <asm/switch_to.h>
 #include <asm/tlb.h>
 #include <asm/irq_regs.h>
@@ -4325,14 +4327,16 @@ static u64 calculate_interference_relative_to_time(struct redf_taskset *taskset,
 		else {
 			/* ceil(D_i/T_j)+1 */
 			interference_from_j = taskset->tasks[task_index]->dl.dl_deadline;	// Storing the deadline in interference_from_j for div calculation.
-			remainder = do_div(interference_from_j, taskset->tasks[j]->dl.dl_period);	// The quotient stores in the interference_from_j.
+			//remainder = do_div(interference_from_j, taskset->tasks[j]->dl.dl_period);	// The quotient stores in the interference_from_j.
+			interference_from_j = div64_u64_rem(interference_from_j, taskset->tasks[j]->dl.dl_period, &remainder);
 			interference_from_j += 1;
 			if (remainder > 0)
 				interference_from_j++;
 
 			/* 1+floor[(t+Di-Dj)/Tj]+1 */
 			interference_from_j_2 = t + taskset->tasks[task_index]->dl.dl_deadline - taskset->tasks[j]->dl.dl_deadline;
-			do_div(interference_from_j_2, taskset->tasks[j]->dl.dl_period);	// The quotient stores in the interference_from_j_2.
+			//do_div(interference_from_j_2, taskset->tasks[j]->dl.dl_period);	// The quotient stores in the interference_from_j_2.
+			interference_from_j_2 = div64_u64(interference_from_j_2, taskset->tasks[j]->dl.dl_period);
 			interference_from_j_2 += 2;
 			
 			interference_from_j = (interference_from_j<interference_from_j_2) ? interference_from_j : interference_from_j_2;
@@ -4351,7 +4355,8 @@ static u64 calculate_response_time_relative_to_time(struct redf_taskset *taskset
 
 	/* W_i(t) = [floor(t/Ti) + 1]*Ci + I_i(t) */
 	w_i_at_t = t;	// Storing t in w_i_at_t for div calculation below.
-	do_div(w_i_at_t, taskset->tasks[task_index]->dl.dl_period);
+	//do_div(w_i_at_t, taskset->tasks[task_index]->dl.dl_period);
+	w_i_at_t = div64_u64(w_i_at_t, taskset->tasks[task_index]->dl.dl_period);
 	w_i_at_t = (w_i_at_t+1)*taskset->tasks[task_index]->dl.dl_runtime + calculate_interference_relative_to_time(taskset, task_index, t);
 
 	if (taskset->tasks[task_index]->dl.dl_runtime > (w_i_at_t-t))
@@ -4377,7 +4382,8 @@ static u64 calculate_r_cap_recursion(struct redf_taskset *taskset, int progress,
 	} else {
 		for (j=0; j<taskset->task_count; j++) {
 			last_r_value_dividend = last_r_value;
-			remainder = do_div(last_r_value_dividend, taskset->tasks[j]->dl.dl_period);	// The quotient stores in the last_r_value_dividend.
+			//remainder = do_div(last_r_value_dividend, taskset->tasks[j]->dl.dl_period);	// The quotient stores in the last_r_value_dividend.
+			last_r_value_dividend = div64_u64_rem(last_r_value_dividend, taskset->tasks[j]->dl.dl_period, &remainder);
 			if (remainder > 0)
 				last_r_value_dividend++;			
 			current_r_value = current_r_value + last_r_value_dividend* taskset->tasks[j]->dl.dl_runtime;
