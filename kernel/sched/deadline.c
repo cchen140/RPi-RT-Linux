@@ -686,7 +686,7 @@ static enum hrtimer_restart dl_task_timer(struct hrtimer *timer)
 #endif
 
 	//printk("redf: task [%d] hrtimer up", p->pid);
-	if ((dl_rq->redf_mode==REDF_IDLE_TIME) || (dl_rq->redf_mode==REDF_FINE_GRAINED)) {
+	if ((dl_rq->redf_mode==REDF_IDLE_TIME) || (dl_rq->redf_mode==REDF_FINE_GRAINED) || dl_rq->redf_mode==REDF_UTR) {
 		if (dl_rq->redf_idle_time_acting == true) {
 			cancel_redf_pi_timer(&dl_rq->redf_pi_timer);
 			update_rib_after_pi_idle_time(dl_rq);
@@ -802,11 +802,12 @@ static void update_curr_dl(struct rq *rq)
 
 	dl_se->runtime -= delta_exec;
 
-	/* redf: update the remaining inversion budget (RIB) for each of lower priority tasks */
+	/* redf: update the remaining inversion budget (RIB) for each of higher/lower priority tasks */
 	for (i=0; i<redf_taskset->task_count; i++) {
 		if (redf_taskset->tasks[i] == curr)
 			continue;
 		if (redf_taskset->tasks[i]->dl.deadline <= dl_se->deadline) {
+			/* Higher priority tasks (closer deadlines) */
 			/* Only decrease a job's rib if it is not a newly arrived job. 
 			 * A new job is always arrived before this update_curr_dl() is called,
 			 * so it is necessary to exclude such new jobs.
@@ -816,6 +817,15 @@ static void update_curr_dl(struct rq *rq)
 				if (redf_taskset->tasks[i]->dl.redf_rib <= 0) {
 					need_reschedule++;
 					//printk("redf: Task[%d]'s RIB became negative when running Task-%d.", i, curr->pid);
+				}
+			}
+		} else {
+			/* Lower priority tasks */
+			if (dl_rq->redf_mode==REDF_UTR) {
+				if (dl_se->dl_yielded && (dl_se->runtime>0)) {
+					/* This is the end of this job instance and there is unused runtime. */
+					// Pass the unused time to lower priority tasks as their inversion budgets.
+					redf_taskset->tasks[i]->dl.redf_rib += dl_se->runtime;
 				}
 			}
 		}
@@ -1993,7 +2003,7 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 		return leftmost_dl_se; 
 
 
-	if ((dl_rq->redf_mode==REDF_IDLE_TIME) || (dl_rq->redf_mode==REDF_FINE_GRAINED)) {
+	if ((dl_rq->redf_mode==REDF_IDLE_TIME) || (dl_rq->redf_mode==REDF_FINE_GRAINED) || (dl_rq->redf_mode==REDF_UTR)) {
 		/* Check if idle task should be included. */
 		if ((candidate_count==rq_task_count) && (idle_time_scheduling_allowed==1)) {
 			rad_candidates[candidate_count] = &dummy_idle_task;
@@ -2008,8 +2018,8 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 	rad_task = rad_candidates[do_div(rad_number,candidate_count)];
 
 	/* If the "idle task" is selected: */
-	if ( ((dl_rq->redf_mode==REDF_IDLE_TIME) || (dl_rq->redf_mode==REDF_FINE_GRAINED)) && (rad_task == &dummy_idle_task)) {
-		if (dl_rq->redf_mode == REDF_FINE_GRAINED) {
+	if ( ((dl_rq->redf_mode==REDF_IDLE_TIME) || (dl_rq->redf_mode==REDF_FINE_GRAINED) || (dl_rq->redf_mode==REDF_UTR)) && (rad_task == &dummy_idle_task)) {
+		if ((dl_rq->redf_mode==REDF_FINE_GRAINED) || (dl_rq->redf_mode==REDF_UTR)) {
 			/* Randomize the scheduled idle time */
 			get_random_bytes(&rad_number, sizeof(rad_number));
 			scheduled_pi_timer_duration = do_div(rad_number, (u64)rq_min_task_rib);
@@ -2070,7 +2080,7 @@ static struct sched_dl_entity *pick_rad_next_dl_entity(struct rq *rq,
 	}
 
 
-	if (dl_rq->redf_mode == REDF_FINE_GRAINED) {
+	if ((dl_rq->redf_mode==REDF_FINE_GRAINED) || (dl_rq->redf_mode==REDF_UTR)) {
 		/* If the remaining runtime is too small then don't bother to randomize. */
 		if ((rad_task->dl.runtime<=min_inversion_budget) && (rad_task->dl.runtime<=REDF_MIN_EXEC_DURATION)) {
 			return &rad_task->dl;
@@ -2153,7 +2163,7 @@ static enum hrtimer_restart redf_pi_timer(struct hrtimer *timer) {
 	update_rq_clock(rq);
 
 	//printk("redf: pi_timer is up");
-	if ((dl_rq->redf_mode==REDF_IDLE_TIME)||(dl_rq->redf_mode==REDF_FINE_GRAINED)) {
+	if ((dl_rq->redf_mode==REDF_IDLE_TIME)||(dl_rq->redf_mode==REDF_FINE_GRAINED)||(dl_rq->redf_mode==REDF_UTR)) {
 		if (dl_rq->redf_idle_time_acting == true) {
 			update_rib_after_pi_idle_time(dl_rq);
 			dl_rq->redf_idle_time_acting = false;

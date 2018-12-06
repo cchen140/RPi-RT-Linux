@@ -513,6 +513,7 @@ enum redf_scheduling_mode {
 	REDF_NORMAL,
 	REDF_IDLE_TIME,
 	REDF_FINE_GRAINED,
+	REDF_UTR		// unused time reclamation
 };
 
 /*
