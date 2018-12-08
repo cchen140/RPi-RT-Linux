@@ -1469,14 +1469,14 @@ struct sched_dl_entity {
 	struct hrtimer dl_timer;
 
 	/*
-	 * redf variables:
+	 * reorder variables:
 	 *
-	 * @redf_wcib worst case inversion budget (WCIB), Vi = Di - WCRTi.
+	 * @reorder_wcib worst case inversion budget (WCIB), Vi = Di - WCRTi.
 	 *
-	 * @redf_rib remaining inversion budget (RIB). It is set to V_i
+	 * @reorder_rib remaining inversion budget (RIB). It is set to V_i
 	 * (WCIB of the task_i) everytime a new job is instantiated.
 	 */
-	s64 redf_wcib, redf_rib;
+	s64 reorder_wcib, reorder_rib;
 };
 
 union rcu_special {

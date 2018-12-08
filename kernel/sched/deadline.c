@@ -802,30 +802,30 @@ static void update_curr_dl(struct rq *rq)
 
 	dl_se->runtime -= delta_exec;
 
-	/* redf: update the remaining inversion budget (RIB) for each of higher/lower priority tasks */
-	for (i=0; i<redf_taskset->task_count; i++) {
-		if (redf_taskset->tasks[i] == curr)
+	/* reorder: update the remaining inversion budget (RIB) for each of higher/lower priority tasks */
+	for (i=0; i<reorder_taskset->task_count; i++) {
+		if (reorder_taskset->tasks[i] == curr)
 			continue;
-		if (redf_taskset->tasks[i]->dl.deadline <= dl_se->deadline) {
+		if (reorder_taskset->tasks[i]->dl.deadline <= dl_se->deadline) {
 			/* Higher priority tasks (closer deadlines) */
 			/* Only decrease a job's rib if it is not a newly arrived job. 
 			 * A new job is always arrived before this update_curr_dl() is called,
 			 * so it is necessary to exclude such new jobs.
 			 */
-			if ((redf_taskset->tasks[i]->dl.deadline-redf_taskset->tasks[i]->dl.dl_period) <= (rq_clock_task(rq)-delta_exec)) {		
-				redf_taskset->tasks[i]->dl.redf_rib -= delta_exec;
-				if (redf_taskset->tasks[i]->dl.redf_rib <= 0) {
+			if ((reorder_taskset->tasks[i]->dl.deadline-reorder_taskset->tasks[i]->dl.dl_period) <= (rq_clock_task(rq)-delta_exec)) {		
+				reorder_taskset->tasks[i]->dl.reorder_rib -= delta_exec;
+				if (reorder_taskset->tasks[i]->dl.reorder_rib <= 0) {
 					need_reschedule++;
-					//printk("redf: Task[%d]'s RIB became negative when running Task-%d.", i, curr->pid);
+					//printk("reorder: Task[%d]'s RIB became negative when running Task-%d.", i, curr->pid);
 				}
 			}
 		} else {
 			/* Lower priority tasks */
-			if (dl_rq->redf_mode==REDF_UTR) {
+			if (dl_rq->reorder_mode==REORDER_RECLAMATION) {
 				if (dl_se->dl_yielded && (dl_se->runtime>0)) {
 					/* This is the end of this job instance and there is unused runtime. */
 					// Pass the unused time to lower priority tasks as their inversion budgets.
-					redf_taskset->tasks[i]->dl.redf_rib += dl_se->runtime;
+					reorder_taskset->tasks[i]->dl.reorder_rib += dl_se->runtime;
 				}
 			}
 		}
@@ -842,7 +842,7 @@ throttle:
 			resched_curr(rq);
 	}
 
-	/* redf: Some tasks' RIBs reach 0. */
+	/* reorder: Some tasks' RIBs reach 0. */
 	if (need_reschedule > 0) {
 		resched_curr(rq);
 	}
@@ -1219,20 +1219,20 @@ pick_next_task_dl(struct rq *rq, struct task_struct *prev, struct pin_cookie coo
 	struct task_struct *p;
 	struct dl_rq *dl_rq;
 
-	// redf: for benchmark
+	// reorder: for benchmark
 	struct timespec ts_start, ts_end;
 
 	dl_rq = &rq->dl;
 
 	/* If the scheduled idle time is still active, then don't do scheduling. */
-	if (dl_rq->redf_idle_time_acting == true) {
+	if (dl_rq->reorderf_idle_time_acting == true) {
 		return NULL;
 	}
 
-	/* redf: to this point we are sure the tasks will be rescheduled, so 
-	 * stop previously started redf_pi_timer if any. 
+	/* reorder: to this point we are sure the tasks will be rescheduled, so 
+	 * stop previously started reorder_pi_timer if any. 
 	 */
-	cancel_redf_pi_timer(&dl_rq->redf_pi_timer);
+	cancel_reorder_pi_timer(&dl_rq->reorder_pi_timer);
 
 	if (need_pull_dl_task(rq, prev)) {
 		/*
@@ -1265,22 +1265,22 @@ pick_next_task_dl(struct rq *rq, struct task_struct *prev, struct pin_cookie coo
 		return NULL;
 
 	/* This line was commented to solve the problem that causes kernel to crash
-	 * when the redf's idle time is active. This call has been moved to after the
+	 * when the reorder's idle time is active. This call has been moved to after the
 	 * "else" below.
 	 */
 	//put_prev_task(rq, prev);
 
 	getnstimeofday(&ts_start);
 	//dl_se = pick_next_dl_entity(rq, dl_rq);
-	dl_se = pick_rad_next_dl_entity(rq, dl_rq);	// redf: task picking function.
+	dl_se = pick_rad_next_dl_entity(rq, dl_rq);	// reorder: task picking function.
 	getnstimeofday(&ts_end);
 
-	//BUG_ON(!dl_se);	// This is no longer a bug if REDF idle time scheduling is enabled.
+	//BUG_ON(!dl_se);	// This is no longer a bug if REORDER idle time scheduling is enabled.
 
 	if (dl_se == NULL) {
 		/* idle task is picked. */
 
-		printk("redf: idle task picked, redf(idle) overhead = %ld +ns. %ld", (ts_end.tv_sec - ts_start.tv_sec), (ts_end.tv_nsec - ts_start.tv_nsec));
+		printk("reorder: idle task picked, reorder(idle) overhead = %ld +ns. %ld", (ts_end.tv_sec - ts_start.tv_sec), (ts_end.tv_nsec - ts_start.tv_nsec));
 		return NULL;
 	} else {
 		/* Non-idle task is picked. */
@@ -1291,11 +1291,11 @@ pick_next_task_dl(struct rq *rq, struct task_struct *prev, struct pin_cookie coo
 		p = dl_task_of(dl_se);
 		p->se.exec_start = rq_clock_task(rq);
 
-		/* redf: Benchmark message output. */
+		/* reorder: Benchmark message output. */
 		if (&dl_se->rb_node == dl_rq->rb_leftmost) {
-			printk("redf: pid[%d] picked, redf(leftmost) overhead = %ld +ns. %ld", p->pid, (ts_end.tv_sec - ts_start.tv_sec), (ts_end.tv_nsec - ts_start.tv_nsec));
+			printk("reorder: pid[%d] picked, reorder(leftmost) overhead = %ld +ns. %ld", p->pid, (ts_end.tv_sec - ts_start.tv_sec), (ts_end.tv_nsec - ts_start.tv_nsec));
 		} else {
-			printk("redf: pid[%d] picked, redf(rad) overhead = %ld +ns. %ld", p->pid, (ts_end.tv_sec - ts_start.tv_sec), (ts_end.tv_nsec - ts_start.tv_nsec));
+			printk("reorder: pid[%d] picked, reorder(rad) overhead = %ld +ns. %ld", p->pid, (ts_end.tv_sec - ts_start.tv_sec), (ts_end.tv_nsec - ts_start.tv_nsec));
 		}
 
 		/* Running task will never be pushed. */

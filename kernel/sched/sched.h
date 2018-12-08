@@ -508,18 +508,18 @@ struct rt_rq {
 #endif
 };
 
-/* redf scheduling modes */
-enum redf_scheduling_mode {
-	REDF_NORMAL,
-	REDF_IDLE_TIME,
-	REDF_FINE_GRAINED,
-	REDF_UTR		// unused time reclamation
+/* reorder scheduling modes */
+enum reorder_scheduling_mode {
+	REORDER_NORMAL,
+	REORDER_IDLE_TIME,
+	REORDER_FINE_GRAINED,
+	REORDER_RECLAMATION		// unused time reclamation
 };
 
 /*
- * redf taskset structure
+ * reorder taskset structure
  */
-struct redf_taskset {
+struct reorder_taskset {
 	struct task_struct *tasks[30];
 	int task_count;
 	u64 r_cap; /* the maximum workload of the taskset */
@@ -533,12 +533,12 @@ struct dl_rq {
 
 	unsigned long dl_nr_running;
 
-	/* redf taskset */
-	struct redf_taskset redf_taskset;
-	struct hrtimer redf_pi_timer; /* priority inversion timer */
-	u64 redf_pi_timer_start_time; /* to store the start time of redf_pi_timer */
-	bool redf_idle_time_acting; /* idle time scheduling status */
-	enum redf_scheduling_mode redf_mode;
+	/* reorder taskset */
+	struct reorder_taskset reorder_taskset;
+	struct hrtimer reorder_pi_timer; /* priority inversion timer */
+	u64 reorder_pi_timer_start_time; /* to store the start time of reorder_pi_timer */
+	bool reorder_idle_time_acting; /* idle time scheduling status */
+	enum reorder_scheduling_mode reorder_mode;
 
 #ifdef CONFIG_SMP
 	/*
